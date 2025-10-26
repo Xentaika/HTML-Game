@@ -27,6 +27,7 @@ body {
   height: 100vh;
   display: block;
   background: transparent;
+  z-index: 0;
 }
 
 #overlay {
@@ -39,6 +40,7 @@ body {
   align-items: flex-start;
   gap: 24px;
   pointer-events: none;
+  z-index: 5;
 }
 
 .hud {
