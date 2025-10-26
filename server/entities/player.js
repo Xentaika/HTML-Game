@@ -1,25 +1,33 @@
 const { MovementInput } = require('./movementInput');
 const { approach } = require('../util/math');
 const { resolvePlayerCollisions } = require('../game/arenaCollider');
+const { createWeapon } = require('../config/weaponTemplates');
+
+const DEFAULT_MONEY = 800;
+const RESPAWN_MONEY_BONUS = 150;
 
 class Player {
-  constructor(id, spawnPoint, config, character) {
+  constructor(id, spawnPoint, config) {
     this.id = id;
     this.config = config;
-    this.character = character;
     this.position = { ...spawnPoint };
     this.velocity = { x: 0, y: 0, z: 0 };
     this.quaternion = { x: 0, y: 0, z: 0, w: 1 };
     this.onGround = true;
     this.input = new MovementInput();
-    this.health = character.maxHealth;
+    this.health = 100;
     this.score = 0;
-    this.weapon = character.loadout.primary;
+    this.money = DEFAULT_MONEY;
     this.lastUpdate = Date.now();
+    this.inBuyZone = false;
 
-    if (this.weapon && typeof this.weapon.reset === 'function') {
-      this.weapon.reset();
-    }
+    this.inventory = {
+      melee: createWeapon('knife'),
+      secondary: createWeapon('glock18'),
+      primary: null
+    };
+    this.activeSlot = 'secondary';
+    this.weapon = this.inventory[this.activeSlot];
   }
 
   resetForRespawn(spawnPoint) {
@@ -28,11 +36,25 @@ class Player {
     this.quaternion = { x: 0, y: 0, z: 0, w: 1 };
     this.onGround = true;
     this.input = new MovementInput();
-    this.health = this.character.maxHealth;
-    this.weapon = this.character.loadout.primary;
-    if (this.weapon && typeof this.weapon.reset === 'function') {
-      this.weapon.reset();
+    this.health = 100;
+    this.money += RESPAWN_MONEY_BONUS;
+    this.inBuyZone = false;
+    this.restoreWeapons();
+    this.lastUpdate = Date.now();
+  }
+
+  restoreWeapons() {
+    this.inventory.melee = createWeapon('knife');
+    if (!this.inventory.secondary) {
+      this.inventory.secondary = createWeapon('glock18');
+    } else {
+      this.inventory.secondary.reset();
     }
+    if (this.inventory.primary) {
+      this.inventory.primary.reset();
+    }
+    this.activeSlot = this.inventory.primary ? 'primary' : 'secondary';
+    this.weapon = this.inventory[this.activeSlot] ?? this.inventory.secondary ?? this.inventory.melee;
   }
 
   updateQuaternion(quaternion) {
@@ -122,13 +144,58 @@ class Player {
       this.weapon.update(time);
     }
 
-    if (typeof this.weapon.tryShoot !== 'function' || !this.weapon.tryShoot(time)) {
+    if (!this.weapon.tryShoot(time)) {
       return null;
     }
 
     const direction = this.getShootDirection();
     const origin = this.getShootOrigin(direction);
-    return { origin, direction };
+    return { origin, direction, weapon: this.weapon };
+  }
+
+  equip(slot) {
+    if (!slot) {
+      return false;
+    }
+    if (!this.inventory[slot]) {
+      return false;
+    }
+    if (this.activeSlot === slot) {
+      return false;
+    }
+    this.activeSlot = slot;
+    this.weapon = this.inventory[slot];
+    return true;
+  }
+
+  giveWeapon(weaponId) {
+    const weapon = createWeapon(weaponId);
+    let slot = weapon.slot;
+    if (slot === 'sniper') {
+      slot = 'primary';
+    }
+    this.inventory[slot] = weapon;
+    this.activeSlot = slot;
+    this.weapon = weapon;
+  }
+
+  tryPurchase(weaponId) {
+    if (!this.inBuyZone) {
+      return { success: false, reason: 'out_of_zone' };
+    }
+    const weapon = createWeapon(weaponId);
+    if (this.money < weapon.template.price) {
+      return { success: false, reason: 'not_enough_money' };
+    }
+    let slot = weapon.slot;
+    if (slot === 'sniper') {
+      slot = 'primary';
+    }
+    this.money -= weapon.template.price;
+    this.inventory[slot] = weapon;
+    this.activeSlot = slot;
+    this.weapon = weapon;
+    return { success: true };
   }
 
   integrate(config, colliders) {
@@ -177,7 +244,9 @@ class Player {
       desiredZ /= magnitude;
     }
 
-    const targetSpeed = this.input.walk ? config.walkSpeed : config.runSpeed;
+    const baseRun = config.runSpeed * (this.weapon?.moveSpeedModifier ?? 1);
+    const baseWalk = config.walkSpeed * (this.weapon?.moveSpeedModifier ?? 1);
+    const targetSpeed = this.input.walk ? baseWalk : baseRun;
     const targetX = desiredX * targetSpeed;
     const targetZ = desiredZ * targetSpeed;
 
@@ -189,7 +258,7 @@ class Player {
       this.velocity.z = approach(this.velocity.z, 0, config.friction * delta);
     }
 
-    const speedLimit = this.input.walk ? config.walkSpeed : config.runSpeed;
+    const speedLimit = targetSpeed;
     if (speedLimit > 0) {
       const horizontalSpeed = Math.hypot(this.velocity.x, this.velocity.z);
       if (horizontalSpeed > speedLimit) {
@@ -222,7 +291,15 @@ class Player {
       quaternion: this.quaternion,
       velocity: this.velocity,
       health: this.health,
-      score: this.score
+      score: this.score,
+      money: this.money,
+      inBuyZone: this.inBuyZone,
+      activeSlot: this.activeSlot,
+      inventory: {
+        melee: this.inventory.melee?.toNetworkState() ?? null,
+        secondary: this.inventory.secondary?.toNetworkState() ?? null,
+        primary: this.inventory.primary?.toNetworkState() ?? null
+      }
     };
   }
 }

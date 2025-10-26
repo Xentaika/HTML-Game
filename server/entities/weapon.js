@@ -1,18 +1,32 @@
 class Weapon {
-  constructor({ name = 'Sidearm', magazineSize = 12, reserve = 60, fireRate = 0.22, reloadDuration = 1.4, bodyDamage = 25, headshotDamage = 100 } = {}) {
-    this.name = name;
-    this.magazineSize = magazineSize;
-    this.maxReserve = reserve;
-    this.fireRate = fireRate;
-    this.reloadDuration = reloadDuration;
-    this.bodyDamage = bodyDamage;
-    this.headshotDamage = headshotDamage;
-
+  constructor(id, template) {
+    this.id = id;
+    this.template = template;
+    this.name = template.name;
+    this.slot = template.slot;
+    this.magazineSize = template.magazineSize;
+    this.maxReserve = template.reserve;
+    this.fireRate = template.fireRate;
+    this.reloadDuration = template.reloadDuration;
+    this.bodyDamage = template.bodyDamage;
+    this.headshotDamage = template.headshotDamage;
+    this.range = template.range;
+    this.moveSpeedModifier = template.moveSpeedModifier ?? 1;
+    this.isMelee = this.slot === 'melee';
     this.reset();
   }
 
   canShoot(time) {
-    return !this.reloading && this.ammo > 0 && time - this.lastShotTime >= this.fireRate;
+    if (this.isMelee) {
+      return time - this.lastShotTime >= this.fireRate;
+    }
+    if (this.reloading) {
+      return false;
+    }
+    if (this.ammo <= 0) {
+      return false;
+    }
+    return time - this.lastShotTime >= this.fireRate;
   }
 
   tryShoot(time) {
@@ -20,12 +34,23 @@ class Weapon {
       return false;
     }
     this.lastShotTime = time;
-    this.ammo -= 1;
+    if (!this.isMelee) {
+      this.ammo -= 1;
+    }
     return true;
   }
 
   startReload(time) {
-    if (this.reloading || this.ammo === this.magazineSize || this.reserve === 0) {
+    if (this.isMelee) {
+      return false;
+    }
+    if (this.reloading) {
+      return false;
+    }
+    if (this.ammo >= this.magazineSize) {
+      return false;
+    }
+    if (this.reserve <= 0) {
       return false;
     }
     this.reloading = true;
@@ -34,10 +59,12 @@ class Weapon {
   }
 
   update(time) {
-    if (!this.reloading || time < this.reloadEndTime) {
+    if (!this.reloading) {
       return false;
     }
-
+    if (time < this.reloadEndTime) {
+      return false;
+    }
     const needed = this.magazineSize - this.ammo;
     const used = Math.min(needed, this.reserve);
     this.reserve -= used;
@@ -47,11 +74,36 @@ class Weapon {
   }
 
   reset() {
-    this.ammo = this.magazineSize;
+    this.ammo = this.isMelee ? 1 : this.magazineSize;
     this.reserve = this.maxReserve;
     this.reloading = false;
     this.reloadEndTime = 0;
     this.lastShotTime = 0;
+  }
+
+  clone() {
+    const weapon = new Weapon(this.id, this.template);
+    weapon.ammo = this.ammo;
+    weapon.reserve = this.reserve;
+    weapon.reloading = this.reloading;
+    weapon.reloadEndTime = this.reloadEndTime;
+    weapon.lastShotTime = this.lastShotTime;
+    return weapon;
+  }
+
+  toNetworkState() {
+    return {
+      id: this.id,
+      name: this.name,
+      slot: this.slot,
+      ammo: this.isMelee ? null : this.ammo,
+      magazineSize: this.magazineSize,
+      reserve: this.isMelee ? null : this.reserve,
+      reloading: this.reloading,
+      reloadDuration: this.reloadDuration,
+      reloadEndTime: this.reloadEndTime,
+      moveSpeedModifier: this.moveSpeedModifier
+    };
   }
 }
 

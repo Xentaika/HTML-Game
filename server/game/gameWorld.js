@@ -1,37 +1,51 @@
-const { Character } = require('../entities/character');
+const fs = require('fs');
+const path = require('path');
 const { Player } = require('../entities/player');
-const { Weapon } = require('../entities/weapon');
 const { ArenaCollider } = require('./arenaCollider');
 const { normalize, distancePointToLine } = require('../util/math');
+const { WEAPON_TEMPLATES } = require('../config/weaponTemplates');
+
+const ARENA_PATH = path.join(__dirname, '..', '..', 'shared', 'arena.json');
+const KILL_REWARD = 300;
+
+function loadArenaConfig() {
+  const raw = fs.readFileSync(ARENA_PATH, 'utf-8');
+  return JSON.parse(raw);
+}
 
 class GameWorld {
   constructor(config) {
     this.config = config;
     this.tick = 0;
     this.players = new Map();
+    this.arena = loadArenaConfig();
+    this.buyZones = (this.arena.buyZones || []).map((zone) => ({
+      center: { x: zone.center[0], y: zone.center[1], z: zone.center[2] },
+      radius: zone.radius
+    }));
+    this.colliders = [];
+    const colliderDefs = [...(this.arena.colliders || []), ...(this.arena.cover || [])];
+    colliderDefs.forEach((def) => {
+      this.colliders.push(
+        new ArenaCollider(
+          { x: def.position[0], y: def.position[1], z: def.position[2] },
+          { x: def.scale[0], y: def.scale[1], z: def.scale[2] }
+        )
+      );
+    });
+
     this.respawnPoints = [
-      { x: 0, y: config.groundLevel, z: 0 },
-      { x: 10, y: config.groundLevel, z: -5 },
-      { x: -8, y: config.groundLevel, z: 4 },
-      { x: 6, y: config.groundLevel, z: 10 },
-      { x: -5, y: config.groundLevel, z: -12 }
-    ];
-    this.colliders = [
-      new ArenaCollider({ x: 0, y: 2, z: -12 }, { x: 4, y: 4, z: 4 }),
-      new ArenaCollider({ x: -10, y: 1.2, z: 6 }, { x: 6, y: 2.4, z: 4 }),
-      new ArenaCollider({ x: 12, y: 3, z: 10 }, { x: 4, y: 6, z: 4 }),
-      new ArenaCollider({ x: -14, y: 2.5, z: -8 }, { x: 5, y: 5, z: 5 })
+      { x: 6, y: config.groundLevel, z: 4 },
+      { x: -6, y: config.groundLevel, z: 4 },
+      { x: 4, y: config.groundLevel, z: -4 },
+      { x: -4, y: config.groundLevel, z: -4 },
+      { x: 10, y: config.groundLevel, z: 0 },
+      { x: -10, y: config.groundLevel, z: 0 }
     ];
   }
 
-  createDefaultCharacter() {
-    return new Character({
-      name: 'Initiate',
-      maxHealth: 100,
-      loadout: {
-        primary: new Weapon({})
-      }
-    });
+  getWeaponCatalog() {
+    return WEAPON_TEMPLATES;
   }
 
   getRandomRespawn() {
@@ -40,8 +54,7 @@ class GameWorld {
 
   addPlayer(id) {
     const spawn = this.getRandomRespawn();
-    const character = this.createDefaultCharacter();
-    const player = new Player(id, spawn, this.config, character);
+    const player = new Player(id, spawn, this.config);
     this.players.set(id, player);
     return player;
   }
@@ -66,6 +79,29 @@ class GameWorld {
     player.updateQuaternion(quaternion);
   }
 
+  handleWeaponSwitch(id, slot) {
+    const player = this.players.get(id);
+    if (!player) {
+      return false;
+    }
+    if (slot === 'sniper') {
+      slot = 'primary';
+    }
+    return player.equip(slot);
+  }
+
+  handlePurchase(id, weaponId) {
+    const player = this.players.get(id);
+    if (!player) {
+      return { success: false, reason: 'unknown_player' };
+    }
+    try {
+      return player.tryPurchase(weaponId);
+    } catch (err) {
+      return { success: false, reason: 'invalid_weapon' };
+    }
+  }
+
   step() {
     const now = Date.now() / 1000;
     this.players.forEach((player) => {
@@ -73,8 +109,18 @@ class GameWorld {
         player.weapon.update(now);
       }
       player.integrate(this.config, this.colliders);
+      player.inBuyZone = this.isInBuyZone(player.position);
     });
     this.tick += 1;
+  }
+
+  isInBuyZone(position) {
+    return this.buyZones.some((zone) => {
+      const dx = position.x - zone.center.x;
+      const dz = position.z - zone.center.z;
+      const distanceSq = dx * dx + dz * dz;
+      return distanceSq <= zone.radius * zone.radius;
+    });
   }
 
   serializePlayers() {
@@ -110,22 +156,22 @@ class GameWorld {
 
   registerHit(shooterId) {
     const shooter = this.players.get(shooterId);
-    if (!shooter) {
+    if (!shooter || shooter.health <= 0) {
       return null;
     }
 
-    const weapon = shooter.weapon;
     const now = Date.now() / 1000;
     const shot = shooter.prepareShot(now);
     if (!shot) {
       return null;
     }
 
-    const { origin, direction } = shot;
+    const { origin, direction, weapon } = shot;
     const dir = normalize(direction);
     if (dir.x === 0 && dir.y === 0 && dir.z === 0) {
       return null;
     }
+    const maxDistance = weapon.range || 80;
     let bestHit = null;
 
     this.players.forEach((target, targetId) => {
@@ -147,7 +193,7 @@ class GameWorld {
       const headData = distancePointToLine(headCenter, origin, dir);
       const bodyData = distancePointToLine(bodyCenter, origin, dir);
 
-      const withinRange = (data) => data.alongRay > 0 && data.alongRay < 80;
+      const withinRange = (data) => data.alongRay > 0 && data.alongRay < maxDistance;
 
       let damage = 0;
       let headshot = false;
@@ -159,6 +205,12 @@ class GameWorld {
         along = headData.alongRay;
       } else if (withinRange(bodyData) && bodyData.distance <= 0.65) {
         damage = weapon.bodyDamage;
+        along = bodyData.alongRay;
+      }
+
+      if (weapon.isMelee && withinRange(bodyData) && bodyData.distance <= 1.2) {
+        damage = weapon.bodyDamage;
+        headshot = false;
         along = bodyData.alongRay;
       }
 
@@ -181,6 +233,7 @@ class GameWorld {
       const killer = this.players.get(shooterId);
       if (killer) {
         killer.score += 1;
+        killer.money += KILL_REWARD;
         newScore = killer.score;
       }
       respawnPosition = this.respawn(target);

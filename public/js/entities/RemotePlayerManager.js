@@ -1,28 +1,27 @@
-import { RemoteAvatar } from './RemoteAvatar.js';
+import { RemotePlayer } from './RemotePlayer.js';
 
 export class RemotePlayerManager {
-  constructor(scene, camera) {
+  constructor(scene, weaponTemplates = {}) {
     this.scene = scene;
-    this.camera = camera;
+    this.weaponTemplates = weaponTemplates;
     this.players = new Map();
+  }
+
+  setWeaponTemplates(templates) {
+    this.weaponTemplates = templates || {};
+    this.players.forEach((remote) => {
+      remote.weaponTemplates = this.weaponTemplates;
+      remote.refreshWeaponModel();
+    });
   }
 
   ensure(id) {
     if (!this.players.has(id)) {
-      const avatar = new RemoteAvatar(id);
-      this.scene.add(avatar.group);
-      this.players.set(id, avatar);
+      const remote = new RemotePlayer(id, this.weaponTemplates);
+      this.scene.add(remote.group);
+      this.players.set(id, remote);
     }
     return this.players.get(id);
-  }
-
-  remove(id) {
-    const avatar = this.players.get(id);
-    if (!avatar) {
-      return;
-    }
-    avatar.dispose(this.scene);
-    this.players.delete(id);
   }
 
   applySnapshot(snapshot, localId) {
@@ -34,11 +33,10 @@ export class RemotePlayerManager {
       if (!info || !info.id || info.id === localId) {
         return;
       }
-      const avatar = this.ensure(info.id);
-      avatar.setSnapshot(info);
+      const remote = this.ensure(info.id);
+      remote.setSnapshot(info);
       seen.add(info.id);
     });
-
     this.players.forEach((_, id) => {
       if (!seen.has(id)) {
         this.remove(id);
@@ -46,33 +44,32 @@ export class RemotePlayerManager {
     });
   }
 
-  update(delta) {
-    this.players.forEach((avatar) => avatar.update(delta));
+  remove(id) {
+    const remote = this.players.get(id);
+    if (!remote) {
+      return;
+    }
+    remote.dispose(this.scene);
+    this.players.delete(id);
   }
 
-  updateNameplates() {
-    this.players.forEach((avatar) => avatar.updateNameplate(this.camera));
+  update(delta) {
+    this.players.forEach((remote) => remote.update(delta));
   }
 
   highlightDamage(targetId, headshot) {
-    const avatar = this.players.get(targetId);
-    if (!avatar) {
+    const remote = this.players.get(targetId);
+    if (!remote) {
       return;
     }
-    avatar.bodyMaterial.color.set(headshot ? 0xff3b81 : 0x37d3ff);
-    setTimeout(() => {
-      avatar.bodyMaterial.color.set(0x3bf5ff);
-    }, 420);
+    remote.highlight(headshot);
   }
 
   setRespawn(targetId, position) {
-    const avatar = this.players.get(targetId);
-    if (!avatar || !position) {
+    const remote = this.players.get(targetId);
+    if (!remote) {
       return;
     }
-    avatar.position.set(position.x, position.y, position.z);
-    avatar.targetPosition.copy(avatar.position);
-    avatar.group.position.copy(avatar.position);
-    avatar.health = 100;
+    remote.setRespawn(position);
   }
 }

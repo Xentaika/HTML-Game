@@ -30,6 +30,7 @@ class ShooterServer {
       '/three-examples',
       express.static(path.join(__dirname, '..', '..', 'node_modules/three/examples/jsm'))
     );
+    this.app.use('/shared', express.static(path.join(__dirname, '..', '..', 'shared')));
   }
 
   setupSockets() {
@@ -39,7 +40,9 @@ class ShooterServer {
       socket.emit('init', {
         id: socket.id,
         snapshot: this.world.getSnapshot(),
-        tickRate: this.config.tickRate
+        tickRate: this.config.tickRate,
+        weapons: this.world.getWeaponCatalog(),
+        buyZones: this.world.buyZones
       });
 
       socket.broadcast.emit('playerJoined', player.toSnapshot());
@@ -76,6 +79,20 @@ class ShooterServer {
 
       socket.on('reload', () => {
         this.world.requestReload(socket.id);
+      });
+
+      socket.on('switchWeapon', (slot, respond) => {
+        const success = this.world.handleWeaponSwitch(socket.id, slot);
+        if (typeof respond === 'function') {
+          respond({ success });
+        }
+      });
+
+      socket.on('buyWeapon', (weaponId, respond) => {
+        const result = this.world.handlePurchase(socket.id, weaponId);
+        if (typeof respond === 'function') {
+          respond(result);
+        }
       });
 
       socket.on('disconnect', () => {
