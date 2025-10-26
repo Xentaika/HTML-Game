@@ -189,6 +189,16 @@ class Player {
       this.velocity.z = approach(this.velocity.z, 0, config.friction * delta);
     }
 
+    const speedLimit = this.input.walk ? config.walkSpeed : config.runSpeed;
+    if (speedLimit > 0) {
+      const horizontalSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+      if (horizontalSpeed > speedLimit) {
+        const scale = speedLimit / horizontalSpeed;
+        this.velocity.x *= scale;
+        this.velocity.z *= scale;
+      }
+    }
+
     if (this.input.consumeJump() && this.onGround) {
       this.velocity.y = config.jumpForce;
       this.onGround = false;
