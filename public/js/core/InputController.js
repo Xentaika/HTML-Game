@@ -1,5 +1,12 @@
 import * as THREE from 'three';
 
+const SLOT_KEYS = {
+  Digit1: 'melee',
+  Digit2: 'secondary',
+  Digit3: 'primary',
+  Digit4: 'primary'
+};
+
 export class InputController {
   constructor(controls, hud) {
     this.controls = controls;
@@ -7,16 +14,29 @@ export class InputController {
     this.keys = {};
     this.pointerLocked = false;
     this.pendingJump = false;
-    this.inputAccumulator = 0;
     this.orientationCache = new THREE.Quaternion();
+
     this.onInput = () => {};
     this.onFire = () => {};
     this.onReload = () => {};
     this.onConnectRequest = () => {};
+    this.onToggleBuy = () => {};
+    this.onSwitchWeapon = () => {};
+
     this.bindEvents();
   }
 
   bindEvents() {
+    this.controls.addEventListener('lock', () => {
+      this.pointerLocked = true;
+      this.hud?.overlay?.classList.add('pointer-locked');
+    });
+
+    this.controls.addEventListener('unlock', () => {
+      this.pointerLocked = false;
+      this.hud?.overlay?.classList.remove('pointer-locked');
+    });
+
     document.addEventListener('keydown', (event) => {
       if (event.repeat) {
         return;
@@ -26,7 +46,16 @@ export class InputController {
         this.pendingJump = true;
       }
       if (event.code === 'KeyR') {
+        event.preventDefault();
         this.onReload();
+      }
+      if (event.code === 'KeyB') {
+        event.preventDefault();
+        this.onToggleBuy();
+      }
+      if (event.code in SLOT_KEYS) {
+        event.preventDefault();
+        this.onSwitchWeapon(SLOT_KEYS[event.code]);
       }
       this.onInput();
     });
@@ -48,37 +77,29 @@ export class InputController {
       }
     });
 
-    this.controls.addEventListener('lock', () => {
-      this.pointerLocked = true;
-      if (this.hud.overlay) {
-        this.hud.overlay.style.pointerEvents = 'none';
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && this.pointerLocked) {
+        document.exitPointerLock();
       }
-    });
-
-    this.controls.addEventListener('unlock', () => {
-      this.pointerLocked = false;
-      if (this.hud.overlay) {
-        this.hud.overlay.style.pointerEvents = 'auto';
-      }
-      this.hud.toggleStartPrompt(true);
     });
   }
 
   buildInputPayload() {
     const quaternion = this.controls.getObject().quaternion;
     return {
+      ...this.getMovementState(),
+      quaternion: { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w }
+    };
+  }
+
+  getMovementState() {
+    return {
       forward: this.keys['KeyW'] || false,
       backward: this.keys['KeyS'] || false,
       left: this.keys['KeyA'] || false,
       right: this.keys['KeyD'] || false,
       walk: Boolean(this.keys['ShiftLeft'] || this.keys['ShiftRight']),
-      jump: this.pendingJump,
-      quaternion: {
-        x: quaternion.x,
-        y: quaternion.y,
-        z: quaternion.z,
-        w: quaternion.w
-      }
+      jump: this.pendingJump
     };
   }
 
@@ -98,5 +119,11 @@ export class InputController {
   acknowledgePayload(payload) {
     this.pendingJump = false;
     this.orientationCache.set(payload.quaternion.x, payload.quaternion.y, payload.quaternion.z, payload.quaternion.w);
+  }
+
+  consumeJump() {
+    const wantsJump = this.pendingJump;
+    this.pendingJump = false;
+    return wantsJump;
   }
 }

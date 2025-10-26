@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Neon Arena - Multiplayer</title>
+    <title>Strike Arena</title>
     <link rel="stylesheet" href="/styles.css" />
     <script type="importmap">
       {
@@ -16,24 +16,26 @@
   </head>
   <body>
     <main id="overlay">
-      <div class="hud">
-        <section class="stat">
-          <h2>Health</h2>
+      <header class="hud-top">
+        <div class="stat-block">
+          <span class="label">HP</span>
           <div class="health-bar">
             <div class="health-fill" id="healthFill"></div>
           </div>
-          <p id="healthValue" class="stat-value">100 HP</p>
-        </section>
-        <section class="stat">
-          <h2>Ammo</h2>
-          <p id="ammoDisplay" class="stat-value">12 / 60</p>
-          <p id="reloadIndicator" class="stat-meta hidden">Перезарядка…</p>
-        </section>
-        <section class="stat">
-          <h2>Kills</h2>
-          <p id="scoreDisplay" class="stat-value">0</p>
-        </section>
-      </div>
+          <span id="healthValue" class="value">100</span>
+        </div>
+        <div class="weapon-block">
+          <span id="weaponName" class="weapon-name">Glock-18</span>
+          <span id="ammoDisplay" class="ammo">20 / 120</span>
+          <span id="reloadIndicator" class="reload hidden">Перезарядка…</span>
+        </div>
+        <div class="economy-block">
+          <span class="label">$</span>
+          <span id="moneyDisplay" class="value">800</span>
+          <span class="label">Kills</span>
+          <span id="scoreDisplay" class="value">0</span>
+        </div>
+      </header>
       <div id="serverStats" class="metrics hidden">
         <div class="metric">
           <span class="label">Ping</span>
@@ -44,6 +46,15 @@
           <span id="tickValue" class="value">—</span>
         </div>
       </div>
+      <section id="buyMenu" class="buy-menu hidden">
+        <header class="buy-header">
+          <h2>Покупка оружия</h2>
+          <button id="closeBuyMenu" class="button">Закрыть</button>
+        </header>
+        <div id="buyCategories" class="buy-categories"></div>
+        <div id="buyItems" class="buy-items"></div>
+        <p id="buyHint" class="buy-hint">Находитесь в зоне покупки и нажмите на оружие чтобы приобрести.</p>
+      </section>
       <div class="feed" id="eventFeed"></div>
       <div class="crosshair" id="crosshair">
         <span class="crosshair-line vertical"></span>
@@ -51,9 +62,10 @@
       </div>
       <div id="hitMarker" class="hit-marker hidden"></div>
       <div id="startPrompt" class="prompt">
-        <h1>Neon Arena</h1>
-        <p>Нажмите, чтобы присоединиться. W A S D – движение, Space – прыжок, ЛКМ – огонь, R – перезарядка.</p>
+        <h1>Strike Arena</h1>
+        <p>Нажмите, чтобы присоединиться. WASD — движение, Space — прыжок, ЛКМ — огонь, R — перезарядка, цифры — смена оружия, B — меню покупки.</p>
       </div>
+      <div id="buyPrompt" class="prompt hidden">Вы в зоне покупки — нажмите B.</div>
       <div id="connectionStatus" class="status hidden">Подключение…</div>
     </main>
     <canvas id="world"></canvas>

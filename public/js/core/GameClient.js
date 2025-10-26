@@ -6,6 +6,8 @@ import { RemotePlayerManager } from '../entities/RemotePlayerManager.js';
 import { InputController } from './InputController.js';
 import { ArenaBuilder } from '../scenes/ArenaBuilder.js';
 import { SmoothPointerLockControls } from './SmoothPointerLockControls.js';
+import { FirstPersonRig } from '../entities/FirstPersonRig.js';
+import { MOVEMENT_CONFIG } from '../config/movementConfig.js';
 
 const INPUT_INTERVAL = 1 / 90;
 
@@ -18,22 +20,28 @@ export class GameClient {
     this.renderer.outputEncoding = THREE.sRGBEncoding;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x050910);
+    this.scene.background = new THREE.Color(0x1a1c18);
 
-    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.1, 400);
     this.controls = new SmoothPointerLockControls(this.camera, this.renderer.domElement, {
-      pointerSpeed: 0.22,
-      smoothingFactor: 0,
-      maxRotationStep: Infinity
+      pointerSpeed: 0.2,
+      smoothingFactor: 0.08,
+      maxRotationStep: 0.1
     });
     this.scene.add(this.controls.getObject());
 
     this.clock = new THREE.Clock();
 
     this.hud = new HUDOverlay();
-    this.player = new LocalPlayer(this.controls);
-    this.remotePlayers = new RemotePlayerManager(this.scene, this.camera);
     this.input = new InputController(this.controls, this.hud);
+    this.player = new LocalPlayer(this.controls, MOVEMENT_CONFIG);
+    this.remotePlayers = new RemotePlayerManager(this.scene);
+    this.firstPersonRig = new FirstPersonRig(this.controls.getObject());
+
+    this.weaponTemplates = {};
+    this.arenaConfig = null;
+    this.buyZones = [];
+    this.colliders = [];
 
     this.networkStats = {
       ping: null,
@@ -46,34 +54,72 @@ export class GameClient {
     this.awaitingPing = false;
     this.pingTimeoutId = null;
 
+    this.inputDirty = false;
+    this.inputAccumulator = 0;
+    this.buyMenuOpen = false;
+    this.expectingPointerUnlock = false;
+
     this.input.onInput = () => {
       this.inputDirty = true;
     };
-    this.input.onFire = () => this.fireWeapon();
-    this.input.onReload = () => this.reloadWeapon();
+    this.input.onFire = () => this.handleFire();
+    this.input.onReload = () => this.handleReload();
     this.input.onConnectRequest = () => this.connect();
+    this.input.onToggleBuy = () => this.toggleBuyMenu();
+    this.input.onSwitchWeapon = (slot) => this.requestWeaponSwitch(slot);
+    this.hud.onBuyRequest = (weaponId) => this.buyWeapon(weaponId);
+    this.hud.closeBuyMenuBtn?.addEventListener('click', () => this.toggleBuyMenu(false));
 
-    this.inputDirty = false;
-    this.inputAccumulator = 0;
+    this.controls.addEventListener('lock', () => {
+      this.expectingPointerUnlock = false;
+      if (!socket.connected) {
+        this.connect();
+      }
+      this.hud.toggleStartPrompt(false);
+      if (this.buyMenuOpen) {
+        this.toggleBuyMenu(false);
+      }
+    });
 
-    this.setupLighting();
-    this.buildArena();
+    this.controls.addEventListener('unlock', () => {
+      if (this.buyMenuOpen) {
+        return;
+      }
+      if (this.expectingPointerUnlock) {
+        this.expectingPointerUnlock = false;
+        return;
+      }
+      this.hud.toggleStartPrompt(true);
+    });
+
+    this.loadInitialData();
     this.setupEvents();
     this.setupSocket();
     this.animate();
   }
 
-  setupLighting() {
-    const ambient = new THREE.AmbientLight(0x7ddaff, 0.3);
-    this.scene.add(ambient);
-
-    const directional = new THREE.DirectionalLight(0x00bfff, 0.6);
-    directional.position.set(10, 20, 8);
-    this.scene.add(directional);
-  }
-
-  buildArena() {
-    ArenaBuilder.build(this.scene);
+  async loadInitialData() {
+    try {
+      const response = await fetch('/shared/arena.json');
+      if (response.ok) {
+        this.arenaConfig = await response.json();
+        ArenaBuilder.build(this.scene, this.arenaConfig);
+        this.buyZones = (this.arenaConfig.buyZones || []).map((zone) => ({
+          center: { x: zone.center[0], y: zone.center[1], z: zone.center[2] },
+          radius: zone.radius
+        }));
+        this.colliders = [...(this.arenaConfig.colliders || []), ...(this.arenaConfig.cover || [])].map((item) => {
+          const half = { x: item.scale[0] / 2, y: item.scale[1] / 2, z: item.scale[2] / 2 };
+          return {
+            min: { x: item.position[0] - half.x, y: item.position[1] - half.y, z: item.position[2] - half.z },
+            max: { x: item.position[0] + half.x, y: item.position[1] + half.y, z: item.position[2] + half.z }
+          };
+        });
+        this.player.setColliders(this.colliders);
+      }
+    } catch (err) {
+      console.error('Failed to load arena description', err);
+    }
   }
 
   setupEvents() {
@@ -114,38 +160,47 @@ export class GameClient {
       this.stopPingMonitor();
       this.resetNetworkStats();
       this.hud.setConnectionStatus('Отключено от сервера');
+      this.hud.toggleStartPrompt(true);
     });
 
-    socket.on('init', ({ id, snapshot, tickRate }) => {
+    socket.on('init', ({ id, snapshot, tickRate, weapons, buyZones }) => {
       this.player.id = id;
-      this.hud.toggleStartPrompt(false);
+      if (Array.isArray(buyZones)) {
+        this.buyZones = buyZones.map((zone) => ({
+          center: { x: zone.center.x, y: zone.center.y, z: zone.center.z },
+          radius: zone.radius
+        }));
+      }
+      if (weapons) {
+        this.weaponTemplates = weapons;
+        this.player.setWeaponTemplates(this.weaponTemplates);
+        this.remotePlayers.setWeaponTemplates(this.weaponTemplates);
+        this.firstPersonRig.setWeaponTemplates(this.weaponTemplates);
+        this.hud.setWeaponCatalog(this.weaponTemplates);
+      }
       this.networkStats.targetTickRate = typeof tickRate === 'number' ? tickRate : null;
       this.resetNetworkStats({ preserveTarget: true });
       if (snapshot) {
         this.applySnapshot(snapshot);
         this.handleSnapshotTiming(snapshot);
       }
-      const quaternion = this.controls.getObject().quaternion;
-      this.input.orientationCache.copy(quaternion);
-      this.hud.updatePlayerStats(this.player);
+      this.hud.toggleStartPrompt(false);
+      this.hud.setConnectionStatus('');
+      this.hud.setConnectionStatus('', false);
     });
 
     socket.on('playerJoined', (info) => {
       if (!info || info.id === this.player.id) {
         return;
       }
-      const avatar = this.remotePlayers.ensure(info.id);
-      avatar.position.set(info.position.x, info.position.y, info.position.z);
-      avatar.targetPosition.copy(avatar.position);
-      avatar.group.position.copy(avatar.position);
-      if (info.quaternion) {
-        avatar.quaternion
-          .set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w)
-          .normalize();
-        avatar.targetQuaternion.copy(avatar.quaternion);
-        avatar.group.quaternion.copy(avatar.quaternion);
-      }
+      const remote = this.remotePlayers.ensure(info.id);
+      remote.setSnapshot(info);
       this.hud.addFeedEntry(`Игрок ${info.id.slice(0, 6)} подключился`);
+    });
+
+    socket.on('playerLeft', ({ id }) => {
+      this.remotePlayers.remove(id);
+      this.hud.addFeedEntry(`Игрок ${id.slice(0, 6)} покинул арену`);
     });
 
     socket.on('stateSnapshot', (snapshot) => {
@@ -156,23 +211,17 @@ export class GameClient {
       this.handleSnapshotTiming(snapshot);
     });
 
-    socket.on('playerLeft', ({ id }) => {
-      this.remotePlayers.remove(id);
-      this.hud.addFeedEntry(`Игрок ${id.slice(0, 6)} покинул арену`);
-    });
-
     socket.on('playerHit', ({ shooterId, targetId, damage, headshot, remaining }) => {
       if (targetId === this.player.id) {
         this.player.health = remaining;
         if (remaining <= 0) {
           this.hud.addFeedEntry(
-            `Вы были устранены игроком ${shooterId.slice(0, 6)}${headshot ? ' (хедшот)' : ''}`,
+            `Вы были устранены ${shooterId.slice(0, 6)}${headshot ? ' (хедшот)' : ''}`,
             headshot
           );
         } else {
           this.hud.addFeedEntry(`Вас ранил ${shooterId.slice(0, 6)} (${damage})`, headshot);
         }
-        this.hud.updatePlayerStats(this.player);
       } else {
         this.remotePlayers.highlightDamage(targetId, headshot);
       }
@@ -182,12 +231,20 @@ export class GameClient {
         this.hud.showHitMarker(headshot);
         this.hud.animateCrosshair(headshot ? 'headshot' : 'hit');
       }
+      this.hud.updatePlayerStats(this.player);
     });
 
     socket.on('playerEliminated', ({ targetId, killerId, respawn, score }) => {
       if (targetId === this.player.id) {
-        this.player.resetOnRespawn(respawn);
+        if (respawn) {
+          this.player.position.set(respawn.x, respawn.y, respawn.z);
+          this.controls.getObject().position.copy(this.player.position);
+        }
+        this.player.health = 100;
+        this.player.inBuyZone = false;
+        this.player.jumpArmed = false;
         this.hud.setReloadIndicator(false);
+        this.firstPersonRig.setReloading(false);
         this.hud.updatePlayerStats(this.player);
       } else {
         this.remotePlayers.setRespawn(targetId, respawn);
@@ -195,12 +252,9 @@ export class GameClient {
 
       if (killerId === this.player.id && typeof score === 'number') {
         this.player.score = score;
-        this.hud.updatePlayerStats(this.player);
         this.hud.addFeedEntry(`Вы устранили ${targetId.slice(0, 6)}!`);
       } else if (targetId === this.player.id) {
         this.hud.addFeedEntry(`Игрок ${killerId.slice(0, 6)} вас устранил`);
-      } else {
-        this.hud.addFeedEntry(`${killerId.slice(0, 6)} устранил ${targetId.slice(0, 6)}`);
       }
     });
   }
@@ -209,21 +263,29 @@ export class GameClient {
     if (!snapshot || !Array.isArray(snapshot.players)) {
       return;
     }
+    const seenRemote = new Set();
     snapshot.players.forEach((info) => {
       if (!info || !info.id) {
         return;
       }
       if (info.id === this.player.id) {
         this.player.applySnapshot(info);
-        this.player.health = info.health;
-        this.player.score = info.score;
-        this.hud.updatePlayerStats(this.player);
+        this.player.setServerTick(snapshot.tick);
+        const weapon = this.player.getWeapon();
+        this.firstPersonRig.setWeapon(weapon?.id || null);
+        this.firstPersonRig.setReloading(Boolean(weapon?.reloading));
+        this.hud.setReloadIndicator(Boolean(weapon?.reloading));
       } else {
-        const avatar = this.remotePlayers.ensure(info.id);
-        avatar.setSnapshot(info);
+        this.remotePlayers.ensure(info.id).setSnapshot(info);
+        seenRemote.add(info.id);
       }
     });
-    this.remotePlayers.applySnapshot(snapshot, this.player.id);
+    this.remotePlayers.players.forEach((_, id) => {
+      if (!seenRemote.has(id)) {
+        this.remotePlayers.remove(id);
+      }
+    });
+    this.hud.updatePlayerStats(this.player);
   }
 
   sendInput(delta) {
@@ -233,7 +295,7 @@ export class GameClient {
     this.inputAccumulator += delta;
     this.input.trackOrientationChanges();
 
-    if (!this.inputDirty && !this.input.pendingJump && this.inputAccumulator < INPUT_INTERVAL) {
+    if (!this.inputDirty && this.inputAccumulator < INPUT_INTERVAL) {
       return;
     }
 
@@ -241,26 +303,29 @@ export class GameClient {
     socket.emit('input', payload);
     this.inputAccumulator = 0;
     this.inputDirty = false;
+    if (payload.jump) {
+      this.player.handleJumpAcknowledged();
+    }
     this.input.acknowledgePayload(payload);
   }
 
-  fireWeapon() {
-    if (!socket.connected || !this.player.id) {
+  handleFire() {
+    if (this.buyMenuOpen || !socket.connected || !this.player.id) {
       return;
     }
     const now = performance.now() / 1000;
-    if (!this.player.weapon.canShoot(now)) {
-      if (this.player.weapon.ammo === 0) {
-        this.reloadWeapon();
+    if (!this.player.canShoot(now)) {
+      if (this.player.getWeapon()?.ammo === 0) {
+        this.handleReload();
       }
       return;
     }
-
-    if (this.player.weapon.shoot(now)) {
+    if (this.player.shoot(now)) {
       this.hud.animateCrosshair('fire');
+      this.firstPersonRig.triggerShot();
       this.hud.updatePlayerStats(this.player);
       const origin = this.controls.getObject().position.clone();
-      const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+      const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
       socket.emit('shoot', {
         origin: { x: origin.x, y: origin.y, z: origin.z },
         direction: { x: direction.x, y: direction.y, z: direction.z }
@@ -269,23 +334,101 @@ export class GameClient {
     }
   }
 
-  reloadWeapon() {
-    if (!socket.connected || !this.player.id) {
+  handleReload() {
+    if (this.buyMenuOpen || !socket.connected || !this.player.id) {
       return;
     }
     const now = performance.now() / 1000;
-    if (this.player.weapon.startReload(now)) {
+    if (this.player.startReload(now)) {
       socket.emit('reload');
       this.hud.setReloadIndicator(true);
-      this.hud.addFeedEntry('Перезарядка…');
+      this.firstPersonRig.setReloading(true);
     }
   }
 
-  updateWeapon(time) {
-    if (this.player.weapon.update(time)) {
+  updateWeaponState(now) {
+    if (this.player.updateReload(now)) {
       this.hud.setReloadIndicator(false);
+      this.firstPersonRig.setReloading(false);
       this.hud.updatePlayerStats(this.player);
     }
+  }
+
+  requestWeaponSwitch(slot) {
+    if (!socket.connected || !this.player.id) {
+      return;
+    }
+    if (this.player.equip(slot)) {
+      const weapon = this.player.getWeapon();
+      this.firstPersonRig.setWeapon(weapon?.id || null);
+      this.hud.updatePlayerStats(this.player);
+    }
+    socket.emit('switchWeapon', slot);
+  }
+
+  buyWeapon(weaponId) {
+    if (!socket.connected || !this.player.id || !weaponId) {
+      return;
+    }
+    socket.emit('buyWeapon', weaponId, (result) => {
+      if (result && result.success) {
+        const template = this.weaponTemplates[weaponId];
+        if (template) {
+          const slot = template.slot === 'sniper' ? 'primary' : template.slot;
+          const weapon = this.player.ensureWeapon(slot, weaponId);
+          if (weapon) {
+            this.player.equip(slot);
+            this.firstPersonRig.setWeapon(weaponId);
+            if (typeof template.price === 'number') {
+              this.player.money = Math.max(0, this.player.money - template.price);
+            }
+            this.hud.updatePlayerStats(this.player);
+          }
+        }
+        this.hud.addFeedEntry(`Покупка ${weaponId} успешна`);
+      } else {
+        let reason;
+        switch (result?.reason) {
+          case 'not_enough_money':
+            reason = 'Недостаточно денег';
+            break;
+          case 'out_of_zone':
+            reason = 'Вы вне зоны покупки';
+            break;
+          case 'invalid_weapon':
+            reason = 'Оружие недоступно';
+            break;
+          default:
+            reason = 'Недоступно';
+        }
+        this.hud.addFeedEntry(reason);
+      }
+    });
+  }
+
+  toggleBuyMenu(force) {
+    const show = typeof force === 'boolean' ? force : !this.buyMenuOpen;
+    if (show && !this.player.inBuyZone) {
+      return;
+    }
+    this.buyMenuOpen = show;
+    this.hud.toggleBuyMenu(show, this.player);
+    if (show) {
+      if (this.input.pointerLocked) {
+        this.expectingPointerUnlock = true;
+        document.exitPointerLock();
+      }
+    } else if (!this.input.pointerLocked && socket.connected) {
+      this.controls.lock();
+    }
+  }
+
+  updateBuyPrompt() {
+    if (this.buyMenuOpen) {
+      this.hud.showBuyPrompt(false);
+      return;
+    }
+    this.hud.showBuyPrompt(this.player.inBuyZone && socket.connected);
   }
 
   resetNetworkStats({ preserveTarget = false } = {}) {
@@ -377,11 +520,16 @@ export class GameClient {
     const now = performance.now() / 1000;
 
     this.controls.update(delta);
+    const movementState = this.input.getMovementState();
+    this.player.update(movementState, delta);
+    const pitch = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ').x;
+    const moving = movementState.forward || movementState.backward || movementState.left || movementState.right ? 1 : 0;
+    this.firstPersonRig.update(delta, THREE.MathUtils.radToDeg(pitch), moving);
+    this.updateWeaponState(now);
     this.sendInput(delta);
-    this.player.update(delta);
     this.remotePlayers.update(delta);
-    this.remotePlayers.updateNameplates();
-    this.updateWeapon(now);
+    this.updateBuyPrompt();
+    this.hud.updatePlayerStats(this.player);
 
     this.renderer.render(this.scene, this.camera);
   }
