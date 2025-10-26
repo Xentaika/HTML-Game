@@ -7,7 +7,9 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const PORT = process.env.PORT || 3000;
+const DEFAULT_PORT = Number(process.env.PORT) || 3000;
+const portLocked = Boolean(process.env.PORT);
+let requestedPort = DEFAULT_PORT;
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/three', express.static(path.join(__dirname, 'node_modules/three/build')));
@@ -208,6 +210,22 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
+server.on('listening', () => {
+  const address = server.address();
+  const activePort = typeof address === 'object' && address ? address.port : requestedPort;
+  console.log(`Server listening on http://localhost:${activePort}`);
 });
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE' && !portLocked && requestedPort !== 0) {
+    console.warn(`Port ${requestedPort} is busy, attempting to use a random available port.`);
+    requestedPort = 0;
+    server.listen(requestedPort);
+    return;
+  }
+
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});
+
+server.listen(requestedPort);
