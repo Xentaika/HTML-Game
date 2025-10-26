@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Multiplayer browser shooter with Three.js and Socket.IO",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server/index.js"
   },
   "author": "",
   "license": "MIT",
