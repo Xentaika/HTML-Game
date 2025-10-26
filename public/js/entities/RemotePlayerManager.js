@@ -59,10 +59,7 @@ export class RemotePlayerManager {
     if (!avatar) {
       return;
     }
-    avatar.bodyMaterial.color.set(headshot ? 0xff3b81 : 0x37d3ff);
-    setTimeout(() => {
-      avatar.bodyMaterial.color.set(0x3bf5ff);
-    }, 420);
+    avatar.applyHitIndicator(headshot);
   }
 
   setRespawn(targetId, position) {
@@ -74,5 +71,24 @@ export class RemotePlayerManager {
     avatar.targetPosition.copy(avatar.position);
     avatar.group.position.copy(avatar.position);
     avatar.health = 100;
+  }
+
+  handleWeaponFired(playerId, weaponId) {
+    const avatar = this.players.get(playerId);
+    if (!avatar) {
+      return;
+    }
+    if (weaponId) {
+      avatar.setWeapon(weaponId);
+    }
+    avatar.triggerFire();
+  }
+
+  handleReload(playerId, duration) {
+    const avatar = this.players.get(playerId);
+    if (!avatar) {
+      return;
+    }
+    avatar.startReload(duration);
   }
 }

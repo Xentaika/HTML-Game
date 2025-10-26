@@ -6,11 +6,11 @@ class MovementConfig {
     this.playerRadius = 0.6;
     this.playerHeight = 1.6;
     this.groundLevel = 1.6;
-    this.runSpeed = 20;
-    this.walkSpeed = 12;
-    this.acceleration = 240;
-    this.friction = 32;
-    this.jumpForce = 6.2;
+    this.runSpeed = 7.2;
+    this.walkSpeed = 4.2;
+    this.acceleration = 120;
+    this.friction = 26;
+    this.jumpForce = 5.8;
   }
 }
 

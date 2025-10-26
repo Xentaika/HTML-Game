@@ -1,6 +1,8 @@
 const { MovementInput } = require('./movementInput');
 const { approach } = require('../util/math');
 const { resolvePlayerCollisions } = require('../game/arenaCollider');
+const { WEAPON_DEFINITIONS } = require('../config/weaponData');
+const { createWeaponState } = require('./weapon');
 
 class Player {
   constructor(id, spawnPoint, config, character) {
@@ -14,12 +16,90 @@ class Player {
     this.input = new MovementInput();
     this.health = character.maxHealth;
     this.score = 0;
-    this.weapon = character.loadout.primary;
+    this.wallet = character.startingWallet;
+    this.lastProcessedInput = 0;
     this.lastUpdate = Date.now();
+    this.inBuyZone = false;
 
-    if (this.weapon && typeof this.weapon.reset === 'function') {
-      this.weapon.reset();
+    this.weapons = new Map();
+    this.slots = new Map();
+    this.activeWeaponId = null;
+
+    this.initializeLoadout();
+  }
+
+  initializeLoadout() {
+    this.character.loadout.forEach((weaponId) => {
+      this.giveWeapon(weaponId, { equip: this.activeWeaponId === null });
+    });
+    if (!this.activeWeaponId) {
+      const fallback = this.slots.values().next().value;
+      this.activeWeaponId = fallback || null;
     }
+  }
+
+  getDefinition(weaponId) {
+    return WEAPON_DEFINITIONS[weaponId] || null;
+  }
+
+  giveWeapon(weaponId, { equip = true } = {}) {
+    const definition = this.getDefinition(weaponId);
+    if (!definition) {
+      return null;
+    }
+    const slot = definition.slot || weaponId;
+    const previousId = this.slots.get(slot);
+    if (previousId && previousId !== weaponId) {
+      this.weapons.delete(previousId);
+    }
+    const state = createWeaponState(weaponId);
+    this.weapons.set(weaponId, state);
+    this.slots.set(slot, weaponId);
+    if (!this.activeWeaponId || equip) {
+      this.activeWeaponId = weaponId;
+    }
+    return state;
+  }
+
+  getActiveWeapon() {
+    if (!this.activeWeaponId) {
+      return null;
+    }
+    return this.weapons.get(this.activeWeaponId) || null;
+  }
+
+  switchWeapon(weaponId) {
+    if (this.weapons.has(weaponId)) {
+      this.activeWeaponId = weaponId;
+      return true;
+    }
+    return false;
+  }
+
+  serializeWeapons() {
+    return Array.from(this.weapons.entries()).map(([weaponId, weaponState]) => {
+      const definition = this.getDefinition(weaponId) || {};
+      return {
+        id: weaponId,
+        slot: definition.slot || weaponId,
+        ammo: weaponState.ammo,
+        reserve: weaponState.reserve,
+        reloading: weaponState.reloading,
+        reloadEndTime: weaponState.reloadEndTime
+      };
+    });
+  }
+
+  resetWeapons() {
+    this.weapons.forEach((weapon) => weapon.reset());
+    if (!this.activeWeaponId) {
+      const first = this.slots.values().next();
+      this.activeWeaponId = first.value || null;
+    }
+  }
+
+  setBuyZoneStatus(inZone) {
+    this.inBuyZone = Boolean(inZone);
   }
 
   resetForRespawn(spawnPoint) {
@@ -29,10 +109,7 @@ class Player {
     this.onGround = true;
     this.input = new MovementInput();
     this.health = this.character.maxHealth;
-    this.weapon = this.character.loadout.primary;
-    if (this.weapon && typeof this.weapon.reset === 'function') {
-      this.weapon.reset();
-    }
+    this.resetWeapons();
   }
 
   updateQuaternion(quaternion) {
@@ -53,7 +130,16 @@ class Player {
   }
 
   applyInput(payload) {
-    this.input.setFromPayload(payload || {});
+    if (!payload) {
+      return;
+    }
+    if (payload.quaternion) {
+      this.updateQuaternion(payload.quaternion);
+    }
+    this.input.setFromPayload(payload.state || payload);
+    if (typeof payload.sequence === 'number') {
+      this.lastProcessedInput = payload.sequence;
+    }
     this.lastUpdate = Date.now();
   }
 
@@ -114,21 +200,17 @@ class Player {
   }
 
   prepareShot(time) {
-    if (!this.weapon) {
+    const weapon = this.getActiveWeapon();
+    if (!weapon) {
       return null;
     }
-
-    if (typeof this.weapon.update === 'function') {
-      this.weapon.update(time);
-    }
-
-    if (typeof this.weapon.tryShoot !== 'function' || !this.weapon.tryShoot(time)) {
+    const shot = weapon.pullTrigger(time);
+    if (!shot) {
       return null;
     }
-
     const direction = this.getShootDirection();
     const origin = this.getShootOrigin(direction);
-    return { origin, direction };
+    return { origin, direction, weapon, shot };
   }
 
   integrate(config, colliders) {
@@ -154,19 +236,20 @@ class Player {
     let desiredX = 0;
     let desiredZ = 0;
 
-    if (this.input.forward) {
+    const input = this.input;
+    if (input.forward) {
       desiredX += forward.x;
       desiredZ += forward.z;
     }
-    if (this.input.backward) {
+    if (input.backward) {
       desiredX -= forward.x;
       desiredZ -= forward.z;
     }
-    if (this.input.right) {
+    if (input.right) {
       desiredX += right.x;
       desiredZ += right.z;
     }
-    if (this.input.left) {
+    if (input.left) {
       desiredX -= right.x;
       desiredZ -= right.z;
     }
@@ -177,7 +260,7 @@ class Player {
       desiredZ /= magnitude;
     }
 
-    const targetSpeed = this.input.walk ? config.walkSpeed : config.runSpeed;
+    const targetSpeed = input.walk ? config.walkSpeed : config.runSpeed;
     const targetX = desiredX * targetSpeed;
     const targetZ = desiredZ * targetSpeed;
 
@@ -189,7 +272,7 @@ class Player {
       this.velocity.z = approach(this.velocity.z, 0, config.friction * delta);
     }
 
-    const speedLimit = this.input.walk ? config.walkSpeed : config.runSpeed;
+    const speedLimit = input.walk ? config.walkSpeed : config.runSpeed;
     if (speedLimit > 0) {
       const horizontalSpeed = Math.hypot(this.velocity.x, this.velocity.z);
       if (horizontalSpeed > speedLimit) {
@@ -199,7 +282,7 @@ class Player {
       }
     }
 
-    if (this.input.consumeJump() && this.onGround) {
+    if (input.consumeJump() && this.onGround) {
       this.velocity.y = config.jumpForce;
       this.onGround = false;
     }
@@ -215,6 +298,10 @@ class Player {
     this.applyGroundConstraint();
   }
 
+  updateWeapons(time) {
+    this.weapons.forEach((weapon) => weapon.update(time));
+  }
+
   toSnapshot() {
     return {
       id: this.id,
@@ -222,7 +309,12 @@ class Player {
       quaternion: this.quaternion,
       velocity: this.velocity,
       health: this.health,
-      score: this.score
+      score: this.score,
+      wallet: this.wallet,
+      inBuyZone: this.inBuyZone,
+      activeWeapon: this.activeWeaponId,
+      weapons: this.serializeWeapons(),
+      lastProcessedInput: this.lastProcessedInput
     };
   }
 }

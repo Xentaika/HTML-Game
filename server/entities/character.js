@@ -1,10 +1,14 @@
-const { Weapon } = require('./weapon');
-
 class Character {
-  constructor({ name = 'Recruit', maxHealth = 100, loadout } = {}) {
+  constructor({
+    name = 'Оперативник',
+    maxHealth = 100,
+    startingWallet = 800,
+    loadout = ['knife', 'glock18']
+  } = {}) {
     this.name = name;
     this.maxHealth = maxHealth;
-    this.loadout = loadout || { primary: new Weapon({}) };
+    this.startingWallet = startingWallet;
+    this.loadout = loadout;
   }
 }
 
