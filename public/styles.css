@@ -136,54 +136,59 @@ body {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 24px;
-  height: 24px;
-  transform: translate(-50%, -50%);
+  width: 0;
+  height: 0;
   pointer-events: none;
+  --gap: 8px;
+  --bar-thickness: 2px;
+  --bar-length: 12px;
+  --bar-color: rgba(240, 240, 240, 0.92);
+  --pulse-scale: 1;
 }
 
 .crosshair .bar {
   position: absolute;
-  background: rgba(240, 240, 240, 0.9);
-  width: 2px;
-  height: 10px;
-  transition: transform 0.08s ease;
+  background: var(--bar-color);
+  border-radius: 1px;
+  transition: top 0.08s ease, left 0.08s ease, transform 0.08s ease, background 0.1s ease;
+}
+
+.crosshair .bar.top,
+.crosshair .bar.bottom {
+  width: var(--bar-thickness);
+  height: var(--bar-length);
+  left: 50%;
+  transform-origin: center;
+  transform: translateX(-50%) scaleY(var(--pulse-scale));
 }
 
 .crosshair .bar.top {
-  top: -12px;
-  left: 11px;
+  top: calc(50% - var(--gap) - var(--bar-length));
 }
 
 .crosshair .bar.bottom {
-  bottom: -12px;
-  left: 11px;
+  top: calc(50% + var(--gap));
+}
+
+.crosshair .bar.left,
+.crosshair .bar.right {
+  height: var(--bar-thickness);
+  width: var(--bar-length);
+  top: 50%;
+  transform-origin: center;
+  transform: translateY(-50%) scaleX(var(--pulse-scale));
 }
 
 .crosshair .bar.left {
-  left: -12px;
-  top: 11px;
-  width: 10px;
-  height: 2px;
+  left: calc(50% - var(--gap) - var(--bar-length));
 }
 
 .crosshair .bar.right {
-  right: -12px;
-  top: 11px;
-  width: 10px;
-  height: 2px;
+  left: calc(50% + var(--gap));
 }
 
-.crosshair.animate .bar {
-  transform: scale(1.2);
-}
-
-.crosshair.hit .bar {
-  background: #8ad36f;
-}
-
-.crosshair.headshot .bar {
-  background: #ff8080;
+.crosshair.animate {
+  --pulse-scale: 1.25;
 }
 
 .hit-marker {

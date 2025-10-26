@@ -95,3 +95,63 @@ export function clampMagnitude(vec, maxLength) {
   const scaleFactor = maxLength / len;
   return scale(vec, scaleFactor);
 }
+
+export function intersectRaySphere(origin, direction, center, radius) {
+  const oc = subtract(origin, center);
+  const b = 2 * dot(direction, oc);
+  const c = dot(oc, oc) - radius * radius;
+  const discriminant = b * b - 4 * c;
+  if (discriminant < 0) {
+    return null;
+  }
+  const sqrtDisc = Math.sqrt(discriminant);
+  const t0 = (-b - sqrtDisc) / 2;
+  const t1 = (-b + sqrtDisc) / 2;
+  const distance = t0 > 0 ? t0 : t1 > 0 ? t1 : null;
+  return distance;
+}
+
+export function intersectRayVerticalCylinder(origin, direction, center, radius, minY, maxY) {
+  const ox = origin.x - center.x;
+  const oz = origin.z - center.z;
+  const dx = direction.x;
+  const dz = direction.z;
+  const a = dx * dx + dz * dz;
+
+  const checkSolution = (t) => {
+    if (t == null || t <= 0) {
+      return null;
+    }
+    const y = origin.y + direction.y * t;
+    if (y < minY || y > maxY) {
+      return null;
+    }
+    return t;
+  };
+
+  if (a < 1e-6) {
+    const radialDistanceSq = ox * ox + oz * oz;
+    if (radialDistanceSq > radius * radius) {
+      return null;
+    }
+    const ty1 = (minY - origin.y) / direction.y;
+    const ty2 = (maxY - origin.y) / direction.y;
+    return checkSolution(Math.min(ty1, ty2)) ?? checkSolution(Math.max(ty1, ty2));
+  }
+
+  const b = 2 * (ox * dx + oz * dz);
+  const c = ox * ox + oz * oz - radius * radius;
+  const discriminant = b * b - 4 * a * c;
+  if (discriminant < 0) {
+    return null;
+  }
+  const sqrtDisc = Math.sqrt(discriminant);
+  let t0 = (-b - sqrtDisc) / (2 * a);
+  let t1 = (-b + sqrtDisc) / (2 * a);
+  if (t0 > t1) {
+    const temp = t0;
+    t0 = t1;
+    t1 = temp;
+  }
+  return checkSolution(t0) ?? checkSolution(t1);
+}

@@ -17,8 +17,16 @@ export class HUD {
     this.playButton = document.getElementById('playButton');
     this.crosshair = document.getElementById('crosshair');
     this.hitMarker = document.getElementById('hitMarker');
+    this.crosshairBaseColor = '#f4f5f7';
+    this.crosshairResetHandle = null;
 
-    this.buyClose?.addEventListener('click', () => this.toggleBuyMenu(false));
+    this.buyCloseCallbacks = new Set();
+    if (this.buyClose) {
+      this.buyClose.addEventListener('click', () => {
+        this.toggleBuyMenu(false);
+        this.buyCloseCallbacks.forEach((cb) => cb());
+      });
+    }
   }
 
   onPlayRequest(callback) {
@@ -100,13 +108,24 @@ export class HUD {
     if (!this.crosshair) {
       return;
     }
-    this.crosshair.classList.remove('hit', 'headshot', 'fire');
-    if (state) {
-      this.crosshair.classList.add(state);
+    const colors = {
+      headshot: '#ff6f6f',
+      hit: '#9be37d',
+      fire: '#fcb86c'
+    };
+    if (this.crosshairResetHandle) {
+      clearTimeout(this.crosshairResetHandle);
     }
+    const color = colors[state] ?? this.crosshairBaseColor;
+    this.crosshair.style.setProperty('--bar-color', color);
+    this.crosshair.classList.remove('animate');
     void this.crosshair.offsetWidth;
     this.crosshair.classList.add('animate');
-    setTimeout(() => this.crosshair.classList.remove('animate'), 120);
+    this.crosshairResetHandle = setTimeout(() => {
+      this.crosshair?.classList.remove('animate');
+      this.crosshair?.style.setProperty('--bar-color', this.crosshairBaseColor);
+      this.crosshairResetHandle = null;
+    }, 140);
   }
 
   showHitMarker(headshot = false) {
@@ -137,7 +156,10 @@ export class HUD {
       const item = document.createElement('button');
       item.className = 'buy-item';
       item.innerHTML = `<span class="weapon">${definition.name}</span><span class="price">$${definition.price}</span>`;
-      item.addEventListener('click', () => onSelect(weaponId));
+      item.addEventListener('click', (event) => {
+        event.stopPropagation();
+        onSelect(weaponId);
+      });
       this.buyList.appendChild(item);
     });
   }
@@ -147,5 +169,35 @@ export class HUD {
       return;
     }
     this.buyMenu.classList.toggle('hidden', !show);
+  }
+
+  onBuyClose(callback) {
+    if (typeof callback === 'function') {
+      this.buyCloseCallbacks.add(callback);
+    }
+  }
+
+  setCrosshairSpread({ gap, thickness, length, color } = {}) {
+    if (!this.crosshair) {
+      return;
+    }
+    if (Number.isFinite(gap)) {
+      const clamped = Math.min(Math.max(gap, 6), 28);
+      this.crosshair.style.setProperty('--gap', `${clamped.toFixed(2)}px`);
+    }
+    if (Number.isFinite(thickness)) {
+      const clamped = Math.min(Math.max(thickness, 1.6), 4.2);
+      this.crosshair.style.setProperty('--bar-thickness', `${clamped.toFixed(2)}px`);
+    }
+    if (Number.isFinite(length)) {
+      const clamped = Math.min(Math.max(length, 10), 22);
+      this.crosshair.style.setProperty('--bar-length', `${clamped.toFixed(2)}px`);
+    }
+    if (color) {
+      this.crosshairBaseColor = color;
+      if (!this.crosshairResetHandle) {
+        this.crosshair.style.setProperty('--bar-color', color);
+      }
+    }
   }
 }

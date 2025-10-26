@@ -24,6 +24,12 @@ export class GameClient {
 
     this.hud = new HUD();
     this.hud.showPlayOverlay(true);
+    this.hud.onBuyClose(() => {
+      if (this.buyMenuOpen) {
+        this.buyMenuOpen = false;
+        this.requestPointerLock();
+      }
+    });
 
     this.remotePlayers = new RemotePlayerManager(this.scene);
     this.localPlayer = new LocalPlayer(this.camera, ArenaLayout);
@@ -68,7 +74,11 @@ export class GameClient {
   }
 
   setupPointerLock() {
-    this.canvas.addEventListener('click', () => {
+    this.canvas.addEventListener('click', (event) => {
+      if (this.buyMenuOpen) {
+        event.preventDefault();
+        return;
+      }
       if (!this.pointerLocked) {
         this.canvas.requestPointerLock();
       }
@@ -205,8 +215,6 @@ export class GameClient {
     }
     const localInfo = snapshot.players.find((player) => player.id === this.playerId);
     if (localInfo) {
-      this.pointer.yaw = localInfo.yaw;
-      this.pointer.pitch = localInfo.pitch;
       this.localPlayer.reconcile(localInfo, this.fixedDelta);
       const activeState = this.localPlayer.getActiveWeaponState();
       if (activeState) {
@@ -220,7 +228,10 @@ export class GameClient {
       if (!localInfo.buyZone && this.buyMenuOpen) {
         this.buyMenuOpen = false;
         this.hud.toggleBuyMenu(false);
+        this.requestPointerLock();
       }
+      this.pointer.yaw = this.localPlayer.state.yaw;
+      this.pointer.pitch = this.localPlayer.state.pitch;
     }
     this.remotePlayers.applySnapshot(snapshot, this.playerId);
   }
@@ -262,8 +273,12 @@ export class GameClient {
     }
     this.buyMenuOpen = !this.buyMenuOpen;
     this.hud.toggleBuyMenu(this.buyMenuOpen);
-    if (this.buyMenuOpen && document.pointerLockElement === this.canvas) {
-      document.exitPointerLock();
+    if (this.buyMenuOpen) {
+      if (document.pointerLockElement === this.canvas) {
+        document.exitPointerLock();
+      }
+    } else {
+      this.requestPointerLock();
     }
   }
 
@@ -278,6 +293,10 @@ export class GameClient {
         this.hud.addKillFeed(`Приобретено: ${WeaponDefinitions[weaponId].name}`, 'info');
         this.hud.toggleBuyMenu(false);
         this.buyMenuOpen = false;
+        if (typeof result.money === 'number') {
+          this.hud.updateMoney(result.money);
+        }
+        this.requestPointerLock();
       }
     });
   }
@@ -326,6 +345,11 @@ export class GameClient {
     const step = this.fixedDelta;
     while (this.accumulator >= step) {
       const payload = this.inputManager.buildInputPayload(this.pointer);
+      if (this.buyMenuOpen) {
+        payload.forward = 0;
+        payload.right = 0;
+        payload.jump = false;
+      }
       this.localPlayer.registerPendingInput(payload);
       this.localPlayer.simulate(payload, step);
       if (socket.connected) {
@@ -336,6 +360,21 @@ export class GameClient {
 
     this.localPlayer.update(delta);
     this.remotePlayers.update(delta);
+    this.updateCrosshair();
     this.renderer.render(this.scene, this.camera);
+  }
+
+  requestPointerLock() {
+    if (this.buyMenuOpen) {
+      return;
+    }
+    if (document.pointerLockElement !== this.canvas) {
+      this.canvas.requestPointerLock();
+    }
+  }
+
+  updateCrosshair() {
+    const state = this.localPlayer.getCrosshairState();
+    this.hud.setCrosshairSpread(state);
   }
 }

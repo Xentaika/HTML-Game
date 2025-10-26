@@ -161,4 +161,23 @@ export class LocalPlayer {
   update(delta) {
     this.viewModel.update(delta, this.state);
   }
+
+  getCrosshairState() {
+    const definition = WeaponDefinitions[this.state.activeWeapon];
+    const speed = Math.hypot(this.state.velocity.x, this.state.velocity.z);
+    const now = performance.now() / 1000;
+    const sinceShot = now - this.lastShotTime;
+    const recoilKick = Math.max(0, 0.22 - sinceShot) * 38 * (definition?.recoilKick ?? 0.4);
+    const moveSpread = speed * (definition?.movementPenalty ?? 0.04) * 65;
+    const baseSpread = (definition?.spread ?? 0.012) * 1400;
+    const gap = 6 + baseSpread + moveSpread + recoilKick;
+    const thickness = 2 + Math.min((definition?.recoilKick ?? 0.6) * 0.35, 1.6);
+    const length = 12 + Math.min((definition?.spread ?? 0.01) * 480, 6);
+    return {
+      gap,
+      thickness,
+      length,
+      color: '#f4f5f7'
+    };
+  }
 }

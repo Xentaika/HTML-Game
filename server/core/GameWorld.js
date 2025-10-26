@@ -2,8 +2,8 @@ import { ArenaLayout } from '../config/arenaConfig.js';
 import { ServerConfig } from '../config/serverConfig.js';
 import { PlayerState } from '../entities/PlayerState.js';
 import { MovementSystem } from '../systems/MovementSystem.js';
-import { distancePointToLine, normalize } from './math.js';
-import { KILL_REWARD, PLAYER_EYE_HEIGHT, PLAYER_RADIUS } from '../../shared/constants.js';
+import { intersectRaySphere, intersectRayVerticalCylinder, normalize } from './math.js';
+import { KILL_REWARD, PLAYER_EYE_HEIGHT, PLAYER_HEIGHT, PLAYER_RADIUS } from '../../shared/constants.js';
 import { WeaponDefinitions } from '../../shared/weapons.js';
 
 export class GameWorld {
@@ -99,11 +99,10 @@ export class GameWorld {
       z: shooter.position.z
     };
 
-    const pitchFactor = 0.55;
     const direction = normalize({
-      x: Math.sin(shooter.orientation.yaw) * Math.cos(shooter.orientation.pitch * pitchFactor),
-      y: Math.sin(shooter.orientation.pitch * pitchFactor),
-      z: -Math.cos(shooter.orientation.yaw) * Math.cos(shooter.orientation.pitch * pitchFactor)
+      x: Math.sin(shooter.orientation.yaw) * Math.cos(shooter.orientation.pitch),
+      y: Math.sin(shooter.orientation.pitch),
+      z: -Math.cos(shooter.orientation.yaw) * Math.cos(shooter.orientation.pitch)
     });
 
     const maxDistance = definition.range ?? 100;
@@ -151,53 +150,40 @@ export class GameWorld {
   }
 
   computeHit(origin, direction, maxDistance, definition, target) {
-    const toTarget = {
-      x: target.position.x - origin.x,
-      y: target.position.y + PLAYER_EYE_HEIGHT - origin.y,
-      z: target.position.z - origin.z
-    };
-    const along = toTarget.x * direction.x + toTarget.y * direction.y + toTarget.z * direction.z;
-    if (along <= 0 || along > maxDistance) {
-      return null;
-    }
-
+    const headRadius = PLAYER_RADIUS * 0.58;
     const headCenter = {
       x: target.position.x,
-      y: target.position.y + PLAYER_EYE_HEIGHT + 0.2,
+      y: target.position.y + PLAYER_HEIGHT - headRadius * 0.6,
       z: target.position.z
     };
-    const bodyCenter = {
-      x: target.position.x,
-      y: target.position.y + PLAYER_EYE_HEIGHT - 0.4,
-      z: target.position.z
-    };
+    const bodyBottom = target.position.y;
+    const bodyTop = headCenter.y - headRadius * 0.85;
+    const bodyRadius = PLAYER_RADIUS * 0.92;
 
-    const headSample = distancePointToLine(headCenter, origin, direction);
-    const bodySample = distancePointToLine(bodyCenter, origin, direction);
+    const headDistance = intersectRaySphere(origin, direction, headCenter, headRadius);
+    let bestHit = null;
 
-    const radius = PLAYER_RADIUS + 0.1;
-    let damage = 0;
-    let headshot = false;
-    let distance = maxDistance;
-
-    if (headSample.alongRay > 0 && headSample.alongRay <= maxDistance && headSample.distance <= radius * 0.7) {
-      damage = Math.round(definition.damage * definition.headshotMultiplier);
-      headshot = true;
-      distance = headSample.alongRay;
-    } else if (bodySample.alongRay > 0 && bodySample.alongRay <= maxDistance && bodySample.distance <= radius) {
-      damage = definition.damage;
-      distance = bodySample.alongRay;
+    if (headDistance != null && headDistance > 0 && headDistance <= maxDistance) {
+      bestHit = {
+        damage: Math.round(definition.damage * definition.headshotMultiplier),
+        headshot: true,
+        distance: headDistance
+      };
     }
 
-    if (damage <= 0) {
-      return null;
+    const bodyDistance = intersectRayVerticalCylinder(origin, direction, target.position, bodyRadius, bodyBottom, bodyTop);
+    if (bodyDistance != null && bodyDistance > 0 && bodyDistance <= maxDistance) {
+      const bodyHit = {
+        damage: definition.damage,
+        headshot: false,
+        distance: bodyDistance
+      };
+      if (!bestHit || bodyHit.distance < bestHit.distance) {
+        bestHit = bodyHit;
+      }
     }
 
-    return {
-      damage,
-      headshot,
-      distance
-    };
+    return bestHit;
   }
 
   step() {
