@@ -1,0 +1,15 @@
+{
+  "name": "three-multiplayer-shooter",
+  "version": "1.0.0",
+  "description": "Multiplayer browser shooter with Three.js and Socket.IO",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "three": "^0.164.1"
+  }
+}

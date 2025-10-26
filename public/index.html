@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neon Arena - Multiplayer</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "/three/three.module.js",
+          "three/addons/": "/three-examples/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main id="overlay">
+      <div class="hud">
+        <section class="stat">
+          <h2>Health</h2>
+          <div class="health-bar">
+            <div class="health-fill" id="healthFill"></div>
+          </div>
+        </section>
+        <section class="stat">
+          <h2>Ammo</h2>
+          <p id="ammoDisplay">12 / 12</p>
+        </section>
+        <section class="stat">
+          <h2>Kills</h2>
+          <p id="scoreDisplay">0</p>
+        </section>
+      </div>
+      <div class="feed" id="eventFeed"></div>
+      <div class="crosshair"></div>
+      <div id="startPrompt" class="prompt">
+        <h1>Neon Arena</h1>
+        <p>Нажмите, чтобы присоединиться. W A S D – движение, Space – прыжок, ЛКМ – огонь, R – перезарядка.</p>
+      </div>
+      <div id="connectionStatus" class="status hidden">Подключение…</div>
+    </main>
+    <canvas id="world"></canvas>
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module" src="/js/game.js"></script>
+  </body>
+</html>
