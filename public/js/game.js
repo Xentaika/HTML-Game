@@ -54,9 +54,9 @@ const player = {
 
 const world = {
   gravity: 30,
-  speed: 14,
-  sprint: 20,
-  jump: 12,
+  speed: 16,
+  sprint: 24,
+  jump: 8,
   friction: 10,
   onGround: false,
   velocity: new THREE.Vector3()
@@ -64,6 +64,11 @@ const world = {
 
 const keys = {};
 const remotePlayers = new Map();
+const colliders = [];
+const playerCollider = {
+  radius: 0.6,
+  height: 1.6
+};
 let lastNetworkUpdate = 0;
 let pointerLocked = false;
 let hitMarkerTimeout = null;
@@ -115,6 +120,8 @@ function showHitMarker(headshot = false) {
 }
 
 function buildArena() {
+  colliders.length = 0;
+
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(120, 120),
     new THREE.MeshStandardMaterial({ color: 0x0a0f23, metalness: 0.2, roughness: 0.8 })
@@ -144,6 +151,10 @@ function buildArena() {
     mesh.position.set(...position);
     mesh.scale.set(...scale);
     scene.add(mesh);
+    mesh.updateMatrixWorld(true);
+
+    const bounds = new THREE.Box3().setFromObject(mesh);
+    colliders.push(bounds);
   });
 
   const sky = new THREE.Mesh(
@@ -327,11 +338,61 @@ function reloadWeapon() {
   }, 1400);
 }
 
+function resolveCollisions(previousPosition, currentPosition) {
+  const radius = playerCollider.radius;
+  const height = playerCollider.height;
+
+  colliders.forEach((collider) => {
+    const top = currentPosition.y;
+    const bottom = top - height;
+
+    if (top < collider.min.y || bottom > collider.max.y) {
+      return;
+    }
+
+    const nearestX = Math.max(collider.min.x, Math.min(currentPosition.x, collider.max.x));
+    const nearestZ = Math.max(collider.min.z, Math.min(currentPosition.z, collider.max.z));
+
+    let deltaX = currentPosition.x - nearestX;
+    let deltaZ = currentPosition.z - nearestZ;
+    let distanceSq = deltaX * deltaX + deltaZ * deltaZ;
+
+    if (distanceSq >= radius * radius) {
+      return;
+    }
+
+    if (distanceSq === 0) {
+      deltaX = currentPosition.x - previousPosition.x;
+      deltaZ = currentPosition.z - previousPosition.z;
+      distanceSq = deltaX * deltaX + deltaZ * deltaZ;
+      if (distanceSq === 0) {
+        deltaX = 1;
+        deltaZ = 0;
+        distanceSq = 1;
+      }
+    }
+
+    const distance = Math.sqrt(distanceSq);
+    const penetration = radius - distance;
+    const normalX = deltaX / distance;
+    const normalZ = deltaZ / distance;
+
+    currentPosition.x += normalX * penetration;
+    currentPosition.z += normalZ * penetration;
+
+    if ((normalX > 0 && world.velocity.x < 0) || (normalX < 0 && world.velocity.x > 0)) {
+      world.velocity.x = 0;
+    }
+    if ((normalZ > 0 && world.velocity.z < 0) || (normalZ < 0 && world.velocity.z > 0)) {
+      world.velocity.z = 0;
+    }
+  });
+}
+
 function updateMovement(delta) {
   const object = controls.getObject();
-  player.position.copy(object.position);
-
   if (!pointerLocked) {
+    player.position.copy(object.position);
     return;
   }
 
@@ -371,7 +432,9 @@ function updateMovement(delta) {
     world.velocity.z -= world.velocity.z * Math.min(world.friction * delta, 1);
   }
 
+  const previousPosition = object.position.clone();
   object.position.addScaledVector(world.velocity, delta);
+  resolveCollisions(previousPosition, object.position);
 
   if (object.position.y < 1.6) {
     world.velocity.y = 0;
@@ -380,6 +443,8 @@ function updateMovement(delta) {
   } else {
     world.onGround = false;
   }
+
+  player.position.copy(object.position);
 }
 
 function sendState(delta) {
