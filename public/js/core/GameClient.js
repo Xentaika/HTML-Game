@@ -21,9 +21,12 @@ export class GameClient {
     this.scene.background = new THREE.Color(0x050910);
 
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
-    this.controls = new PointerLockControls(this.camera, document.body);
-    this.controls.pointerSpeed = 0.28;
+    this.controls = new PointerLockControls(this.camera, this.renderer.domElement);
+    this.controls.pointerSpeed = 0.24;
     this.scene.add(this.controls.getObject());
+
+    this.renderer.domElement.setAttribute('tabindex', '0');
+    this.renderer.domElement.style.outline = 'none';
 
     this.clock = new THREE.Clock();
 
@@ -41,6 +44,9 @@ export class GameClient {
 
     this.inputDirty = false;
     this.inputAccumulator = 0;
+    this.deltaAccumulator = 0;
+
+    this.serverClockOffset = null;
 
     this.setupLighting();
     this.buildArena();
@@ -65,6 +71,8 @@ export class GameClient {
   setupEvents() {
     window.addEventListener('resize', () => this.handleResize());
     this.handleResize();
+
+    this.renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
 
     if (this.hud.startPrompt) {
       this.hud.startPrompt.addEventListener('click', () => {
@@ -187,6 +195,10 @@ export class GameClient {
     if (!snapshot || !Array.isArray(snapshot.players)) {
       return;
     }
+    this.updateServerClock(snapshot.time);
+    const lead = this.getPredictionLead();
+    this.player.setPredictionLead(lead);
+    this.remotePlayers.setPredictionLead(lead);
     snapshot.players.forEach((info) => {
       if (!info || !info.id) {
         return;
@@ -209,6 +221,7 @@ export class GameClient {
       return;
     }
     this.inputAccumulator += delta;
+    this.deltaAccumulator += delta;
     this.input.trackOrientationChanges();
 
     if (!this.inputDirty && !this.input.pendingJump && this.inputAccumulator < INPUT_INTERVAL) {
@@ -216,8 +229,10 @@ export class GameClient {
     }
 
     const payload = this.input.buildInputPayload();
+    payload.frameTime = this.deltaAccumulator;
     socket.emit('input', payload);
     this.inputAccumulator = 0;
+    this.deltaAccumulator = 0;
     this.inputDirty = false;
     this.input.acknowledgePayload(payload);
   }
@@ -274,5 +289,28 @@ export class GameClient {
     this.updateWeapon(now);
 
     this.renderer.render(this.scene, this.camera);
+  }
+
+  updateServerClock(serverTime) {
+    if (typeof serverTime !== 'number' || !Number.isFinite(serverTime)) {
+      return;
+    }
+    const now = Date.now() / 1000;
+    const offset = now - serverTime;
+    if (!Number.isFinite(offset)) {
+      return;
+    }
+    if (this.serverClockOffset === null) {
+      this.serverClockOffset = offset;
+    } else {
+      this.serverClockOffset = THREE.MathUtils.lerp(this.serverClockOffset, offset, 0.1);
+    }
+  }
+
+  getPredictionLead() {
+    if (this.serverClockOffset === null) {
+      return 0.06;
+    }
+    return Math.min(0.1, Math.max(0.03, this.serverClockOffset));
   }
 }

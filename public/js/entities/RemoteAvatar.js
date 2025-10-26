@@ -2,6 +2,8 @@ import * as THREE from 'three';
 
 const SNAP_DISTANCE_SQ = 25;
 const REMOTE_SMOOTHING = 10;
+const MIN_LEAD = 0.02;
+const MAX_LEAD = 0.12;
 
 export class RemoteAvatar {
   constructor(id) {
@@ -15,11 +17,20 @@ export class RemoteAvatar {
     this.quaternion = new THREE.Quaternion();
     this.targetQuaternion = new THREE.Quaternion();
     this.health = 100;
+    this.predictionLead = 0.06;
+    this.tempVelocity = new THREE.Vector3();
 
     this.nameplate = document.createElement('div');
     this.nameplate.className = 'nameplate';
     this.nameplate.textContent = id.slice(0, 6);
     document.body.appendChild(this.nameplate);
+  }
+
+  setPredictionLead(lead) {
+    if (typeof lead !== 'number' || !Number.isFinite(lead)) {
+      return;
+    }
+    this.predictionLead = Math.min(MAX_LEAD, Math.max(MIN_LEAD, lead));
   }
 
   _buildAvatar() {
@@ -55,6 +66,10 @@ export class RemoteAvatar {
       return;
     }
     this.targetPosition.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
+    if (snapshot.velocity) {
+      this.tempVelocity.set(snapshot.velocity.x || 0, snapshot.velocity.y || 0, snapshot.velocity.z || 0);
+      this.targetPosition.addScaledVector(this.tempVelocity, this.predictionLead);
+    }
     this.targetQuaternion
       .set(snapshot.quaternion.x, snapshot.quaternion.y, snapshot.quaternion.z, snapshot.quaternion.w)
       .normalize();

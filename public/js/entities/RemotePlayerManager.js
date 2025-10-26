@@ -5,11 +5,13 @@ export class RemotePlayerManager {
     this.scene = scene;
     this.camera = camera;
     this.players = new Map();
+    this.predictionLead = 0.06;
   }
 
   ensure(id) {
     if (!this.players.has(id)) {
       const avatar = new RemoteAvatar(id);
+      avatar.setPredictionLead(this.predictionLead);
       this.scene.add(avatar.group);
       this.players.set(id, avatar);
     }
@@ -48,6 +50,14 @@ export class RemotePlayerManager {
 
   update(delta) {
     this.players.forEach((avatar) => avatar.update(delta));
+  }
+
+  setPredictionLead(lead) {
+    if (typeof lead !== 'number' || !Number.isFinite(lead)) {
+      return;
+    }
+    this.predictionLead = Math.min(0.12, Math.max(0.02, lead));
+    this.players.forEach((avatar) => avatar.setPredictionLead(this.predictionLead));
   }
 
   updateNameplates() {
