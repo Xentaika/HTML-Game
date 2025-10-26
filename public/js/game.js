@@ -14,6 +14,7 @@ scene.background = new THREE.Color(0x050910);
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
 const controls = new PointerLockControls(camera, document.body);
+controls.pointerSpeed = 0.32;
 scene.add(controls.getObject());
 
 const ambient = new THREE.AmbientLight(0x7ddaff, 0.3);
@@ -40,6 +41,7 @@ const hitMarker = document.getElementById('hitMarker');
 const player = {
   id: null,
   position: new THREE.Vector3(),
+  targetPosition: new THREE.Vector3(),
   quaternion: new THREE.Quaternion(),
   ammo: 12,
   magazineSize: 12,
@@ -55,11 +57,16 @@ const player = {
 const keys = {};
 const remotePlayers = new Map();
 
+const LOCAL_SMOOTHING = 16;
+const REMOTE_SMOOTHING = 9;
+const SNAP_DISTANCE_SQ = 36;
+const tempVector = new THREE.Vector3();
+
 let inputDirty = false;
 let pendingJump = false;
 const orientationCache = { x: 0, y: 0, z: 0, w: 1 };
 let inputAccumulator = 0;
-const INPUT_INTERVAL = 1 / 60;
+const INPUT_INTERVAL = 1 / 120;
 const MOVEMENT_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'ShiftRight']);
 let pointerLocked = false;
 let hitMarkerTimeout = null;
@@ -200,9 +207,19 @@ function createRemoteAvatar(id) {
     group,
     nameplate,
     bodyMaterial,
+    position: new THREE.Vector3(),
+    targetPosition: new THREE.Vector3(),
+    quaternion: new THREE.Quaternion(),
+    targetQuaternion: new THREE.Quaternion(),
     health: 100,
     score: 0
   });
+
+  const remote = remotePlayers.get(id);
+  remote.position.copy(group.position);
+  remote.targetPosition.copy(group.position);
+  remote.quaternion.copy(group.quaternion);
+  remote.targetQuaternion.copy(group.quaternion);
 
   scene.add(group);
 }
@@ -213,6 +230,33 @@ function removeRemoteAvatar(id) {
   scene.remove(remote.group);
   remote.nameplate.remove();
   remotePlayers.delete(id);
+}
+
+function smoothLocalPlayer(delta) {
+  if (!player.targetPosition) {
+    return;
+  }
+  const alpha = 1 - Math.exp(-LOCAL_SMOOTHING * delta);
+  if (alpha <= 0) {
+    return;
+  }
+  player.position.lerp(player.targetPosition, alpha);
+  controls.getObject().position.copy(player.position);
+}
+
+function updateRemotePlayerTransforms(delta) {
+  const alpha = 1 - Math.exp(-REMOTE_SMOOTHING * delta);
+  remotePlayers.forEach((remote) => {
+    if (alpha > 0) {
+      remote.position.lerp(remote.targetPosition, alpha);
+      remote.quaternion.slerp(remote.targetQuaternion, alpha);
+    } else {
+      remote.position.copy(remote.targetPosition);
+      remote.quaternion.copy(remote.targetQuaternion);
+    }
+    remote.group.position.copy(remote.position);
+    remote.group.quaternion.copy(remote.quaternion);
+  });
 }
 
 function updateNameplates() {
@@ -280,6 +324,7 @@ function connect() {
 
 function spawnAt(position) {
   player.position.set(position.x, position.y, position.z);
+  player.targetPosition.copy(player.position);
   controls.getObject().position.copy(player.position);
 }
 
@@ -354,22 +399,13 @@ function buildInputPayload() {
   };
 }
 
-function sendInput(delta) {
+function transmitInput() {
   if (!socket.connected || !player.id) {
-    pendingJump = false;
     return;
   }
-
-  inputAccumulator += delta;
-  const shouldSend = inputDirty || pendingJump || inputAccumulator >= INPUT_INTERVAL;
-  if (!shouldSend) {
-    return;
-  }
-
-  inputAccumulator = 0;
   const payload = buildInputPayload();
   socket.emit('input', payload);
-
+  inputAccumulator = 0;
   pendingJump = false;
   inputDirty = false;
   orientationCache.x = payload.quaternion.x;
@@ -378,11 +414,26 @@ function sendInput(delta) {
   orientationCache.w = payload.quaternion.w;
 }
 
+function sendInput(delta) {
+  if (!socket.connected || !player.id) {
+    return;
+  }
+
+  inputAccumulator += delta;
+  if (!inputDirty && !pendingJump && inputAccumulator < INPUT_INTERVAL) {
+    return;
+  }
+
+  transmitInput();
+}
+
 function animate() {
   requestAnimationFrame(animate);
   const delta = clock.getDelta();
   trackOrientationChanges();
   sendInput(delta);
+  smoothLocalPlayer(delta);
+  updateRemotePlayerTransforms(delta);
   renderer.render(scene, camera);
   updateNameplates();
 }
@@ -409,6 +460,8 @@ function initEvents() {
     } else if (MOVEMENT_KEYS.has(event.code)) {
       inputDirty = true;
     }
+
+    sendInput(0);
   });
 
   document.addEventListener('keyup', (event) => {
@@ -419,6 +472,8 @@ function initEvents() {
     } else if (MOVEMENT_KEYS.has(event.code)) {
       inputDirty = true;
     }
+
+    sendInput(0);
   });
 
   document.addEventListener('mousedown', (event) => {
@@ -472,14 +527,18 @@ function setupSocket() {
         player.health = info.health;
         player.score = info.score;
         if (info.quaternion) {
-          player.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w);
+          player.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w).normalize();
         }
       } else {
         createRemoteAvatar(info.id);
         const remote = remotePlayers.get(info.id);
-        remote.group.position.set(info.position.x, info.position.y, info.position.z);
+        remote.position.set(info.position.x, info.position.y, info.position.z);
+        remote.targetPosition.copy(remote.position);
+        remote.group.position.copy(remote.position);
         if (info.quaternion) {
-          remote.group.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w);
+          remote.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w).normalize();
+          remote.targetQuaternion.copy(remote.quaternion);
+          remote.group.quaternion.copy(remote.quaternion);
         }
       }
     });
@@ -495,9 +554,13 @@ function setupSocket() {
     if (info.id === player.id) return;
     createRemoteAvatar(info.id);
     const remote = remotePlayers.get(info.id);
-    remote.group.position.set(info.position.x, info.position.y, info.position.z);
+    remote.position.set(info.position.x, info.position.y, info.position.z);
+    remote.targetPosition.copy(remote.position);
+    remote.group.position.copy(remote.position);
     if (info.quaternion) {
-      remote.group.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w);
+      remote.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w).normalize();
+      remote.targetQuaternion.copy(remote.quaternion);
+      remote.group.quaternion.copy(remote.quaternion);
     }
     addFeedEntry(`Игрок ${info.id.slice(0, 6)} подключился`);
   });
@@ -513,9 +576,16 @@ function setupSocket() {
       }
 
       if (info.id === player.id) {
-        player.position.set(info.position.x, info.position.y, info.position.z);
-        controls.getObject().position.copy(player.position);
-        player.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w);
+        const { x, y, z } = info.position;
+        tempVector.set(x, y, z);
+        if (player.position.distanceToSquared(tempVector) > SNAP_DISTANCE_SQ) {
+          player.position.copy(tempVector);
+          player.targetPosition.copy(tempVector);
+          controls.getObject().position.copy(player.position);
+        } else {
+          player.targetPosition.copy(tempVector);
+        }
+        player.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w).normalize();
       } else {
         if (!remotePlayers.has(info.id)) {
           createRemoteAvatar(info.id);
@@ -524,8 +594,19 @@ function setupSocket() {
         if (!remote) {
           return;
         }
-        remote.group.position.set(info.position.x, info.position.y, info.position.z);
-        remote.group.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w);
+        const { x, y, z } = info.position;
+        remote.targetPosition.set(x, y, z);
+        if (remote.position.distanceToSquared(remote.targetPosition) > SNAP_DISTANCE_SQ) {
+          remote.position.copy(remote.targetPosition);
+          remote.group.position.copy(remote.position);
+        }
+        remote.targetQuaternion
+          .set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w)
+          .normalize();
+        if (1 - Math.abs(remote.quaternion.dot(remote.targetQuaternion)) > 0.2) {
+          remote.quaternion.copy(remote.targetQuaternion);
+          remote.group.quaternion.copy(remote.quaternion);
+        }
       }
     });
   });
@@ -575,7 +656,9 @@ function setupSocket() {
       updateHUD();
     } else if (remotePlayers.has(targetId)) {
       const remote = remotePlayers.get(targetId);
-      remote.group.position.set(respawn.x, respawn.y, respawn.z);
+      remote.position.set(respawn.x, respawn.y, respawn.z);
+      remote.targetPosition.copy(remote.position);
+      remote.group.position.copy(remote.position);
       remote.health = 100;
     }
 
