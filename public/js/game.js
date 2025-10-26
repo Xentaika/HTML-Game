@@ -117,10 +117,29 @@ function buildArena() {
 }
 
 function createRemoteAvatar(id) {
-  const material = new THREE.MeshStandardMaterial({ color: 0x3bf5ff, emissive: 0x082a40 });
-  const geometry = new THREE.CapsuleGeometry(0.6, 1.6, 8, 16);
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.castShadow = true;
+  const group = new THREE.Group();
+
+  const avatar = new THREE.Group();
+  avatar.position.y = -1.6;
+  group.add(avatar);
+
+  const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x3bf5ff, emissive: 0x082a40 });
+  const bodyGeometry = new THREE.CapsuleGeometry(0.45, 1.1, 8, 16);
+  const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+  body.position.y = 1.0;
+  body.castShadow = true;
+  avatar.add(body);
+
+  const headMaterial = new THREE.MeshStandardMaterial({ color: 0xe2f7ff, emissive: 0x1c3d5b });
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.38, 24, 24), headMaterial);
+  head.position.y = 1.95;
+  avatar.add(head);
+
+  const weaponMaterial = new THREE.MeshStandardMaterial({ color: 0x0f1115, metalness: 0.6, roughness: 0.3, emissive: 0x132437 });
+  const weapon = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.2, 1.2), weaponMaterial);
+  weapon.position.set(0.45, 1.2, -0.6);
+  weapon.rotation.y = Math.PI / 10;
+  avatar.add(weapon);
 
   const nameplate = document.createElement('div');
   nameplate.className = 'nameplate';
@@ -128,26 +147,27 @@ function createRemoteAvatar(id) {
   document.body.appendChild(nameplate);
 
   remotePlayers.set(id, {
-    mesh,
+    group,
     nameplate,
+    bodyMaterial,
     health: 100,
     score: 0
   });
 
-  scene.add(mesh);
+  scene.add(group);
 }
 
 function removeRemoteAvatar(id) {
   const remote = remotePlayers.get(id);
   if (!remote) return;
-  scene.remove(remote.mesh);
+  scene.remove(remote.group);
   remote.nameplate.remove();
   remotePlayers.delete(id);
 }
 
 function updateNameplates() {
   remotePlayers.forEach((remote) => {
-    const vector = remote.mesh.position.clone();
+    const vector = remote.group.position.clone();
     vector.y += 2.4;
     vector.project(camera);
 
@@ -330,7 +350,7 @@ function animate() {
 function initEvents() {
   document.addEventListener('keydown', (event) => {
     keys[event.code] = true;
-    if ((event.code === 'Space' || event.code === 'KeyW') && world.onGround) {
+    if (event.code === 'Space' && world.onGround) {
       world.velocity.y = player.health > 0 ? world.jump : 0;
       world.onGround = false;
     }
@@ -392,7 +412,7 @@ function setupSocket() {
         player.score = info.score;
       } else {
         createRemoteAvatar(info.id);
-        remotePlayers.get(info.id).mesh.position.set(
+        remotePlayers.get(info.id).group.position.set(
           info.position.x,
           info.position.y,
           info.position.z
@@ -405,15 +425,15 @@ function setupSocket() {
   socket.on('playerJoined', (info) => {
     if (info.id === player.id) return;
     createRemoteAvatar(info.id);
-    remotePlayers.get(info.id).mesh.position.set(info.position.x, info.position.y, info.position.z);
+    remotePlayers.get(info.id).group.position.set(info.position.x, info.position.y, info.position.z);
     addFeedEntry(`Игрок ${info.id.slice(0, 6)} подключился`);
   });
 
   socket.on('playerState', ({ id, position, quaternion }) => {
     const remote = remotePlayers.get(id);
     if (!remote) return;
-    remote.mesh.position.set(position.x, position.y, position.z);
-    remote.mesh.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
+    remote.group.position.set(position.x, position.y, position.z);
+    remote.group.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
   });
 
   socket.on('playerLeft', ({ id }) => {
@@ -433,9 +453,9 @@ function setupSocket() {
     } else if (remotePlayers.has(targetId)) {
       const remote = remotePlayers.get(targetId);
       remote.health = remaining;
-      remote.mesh.material.color.set(headshot ? 0xff3b81 : 0x37d3ff);
+      remote.bodyMaterial.color.set(headshot ? 0xff3b81 : 0x37d3ff);
       setTimeout(() => {
-        remote.mesh.material.color.set(0x3bf5ff);
+        remote.bodyMaterial.color.set(0x3bf5ff);
       }, 400);
     }
 
@@ -454,7 +474,7 @@ function setupSocket() {
       updateHUD();
     } else if (remotePlayers.has(targetId)) {
       const remote = remotePlayers.get(targetId);
-      remote.mesh.position.set(respawn.x, respawn.y, respawn.z);
+      remote.group.position.set(respawn.x, respawn.y, respawn.z);
       remote.health = 100;
     }
 
