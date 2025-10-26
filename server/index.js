@@ -1,3 +1,4 @@
-const { ShooterServer } = require('./network/shooterServer');
+import { ShooterServer } from './network/ShooterServer.js';
 
-new ShooterServer().listen();
+const server = new ShooterServer();
+server.listen();
