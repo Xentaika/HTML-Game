@@ -1,18 +1,38 @@
-class Weapon {
-  constructor({ name = 'Sidearm', magazineSize = 12, reserve = 60, fireRate = 0.22, reloadDuration = 1.4, bodyDamage = 25, headshotDamage = 100 } = {}) {
-    this.name = name;
-    this.magazineSize = magazineSize;
-    this.maxReserve = reserve;
-    this.fireRate = fireRate;
-    this.reloadDuration = reloadDuration;
-    this.bodyDamage = bodyDamage;
-    this.headshotDamage = headshotDamage;
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
+class Weapon {
+  constructor(definition) {
+    this.definition = definition;
+    this.id = definition.id;
+    this.name = definition.name;
+    this.slot = definition.slot;
+    this.magazineSize = Number.isFinite(definition.magazineSize) ? definition.magazineSize : Infinity;
+    this.maxReserve = Number.isFinite(definition.reserve) ? definition.reserve : Infinity;
+    this.fireRate = definition.fireRate;
+    this.reloadDuration = definition.reloadDuration;
+    this.bodyDamage = definition.bodyDamage;
+    this.headshotDamage = definition.headshotDamage;
+    this.range = definition.range;
+    this.price = definition.price || 0;
     this.reset();
   }
 
+  reset() {
+    this.ammo = Number.isFinite(this.magazineSize) ? this.magazineSize : Infinity;
+    this.reserve = Number.isFinite(this.maxReserve) ? this.maxReserve : Infinity;
+    this.lastShotTime = 0;
+    this.reloading = false;
+    this.reloadEndTime = 0;
+  }
+
   canShoot(time) {
-    return !this.reloading && this.ammo > 0 && time - this.lastShotTime >= this.fireRate;
+    if (this.reloading) {
+      return false;
+    }
+    if (!Number.isFinite(this.ammo)) {
+      return time - this.lastShotTime >= this.fireRate;
+    }
+    return this.ammo > 0 && time - this.lastShotTime >= this.fireRate;
   }
 
   tryShoot(time) {
@@ -20,12 +40,20 @@ class Weapon {
       return false;
     }
     this.lastShotTime = time;
-    this.ammo -= 1;
+    if (Number.isFinite(this.ammo)) {
+      this.ammo = clamp(this.ammo - 1, 0, this.magazineSize);
+    }
     return true;
   }
 
   startReload(time) {
-    if (this.reloading || this.ammo === this.magazineSize || this.reserve === 0) {
+    if (this.reloading) {
+      return false;
+    }
+    if (!Number.isFinite(this.ammo) || !Number.isFinite(this.reserve)) {
+      return false;
+    }
+    if (this.ammo >= this.magazineSize || this.reserve <= 0) {
       return false;
     }
     this.reloading = true;
@@ -37,21 +65,26 @@ class Weapon {
     if (!this.reloading || time < this.reloadEndTime) {
       return false;
     }
-
     const needed = this.magazineSize - this.ammo;
-    const used = Math.min(needed, this.reserve);
-    this.reserve -= used;
-    this.ammo += used;
+    const refill = Math.min(needed, this.reserve);
+    this.ammo += refill;
+    this.reserve -= refill;
     this.reloading = false;
     return true;
   }
 
-  reset() {
-    this.ammo = this.magazineSize;
-    this.reserve = this.maxReserve;
-    this.reloading = false;
-    this.reloadEndTime = 0;
-    this.lastShotTime = 0;
+  toState() {
+    return {
+      id: this.id,
+      name: this.name,
+      slot: this.slot,
+      ammo: Number.isFinite(this.ammo) ? this.ammo : null,
+      magazineSize: Number.isFinite(this.magazineSize) ? this.magazineSize : null,
+      reserve: Number.isFinite(this.reserve) ? this.reserve : null,
+      reloading: this.reloading,
+      reloadEndTime: this.reloadEndTime,
+      fireRate: this.fireRate
+    };
   }
 }
 

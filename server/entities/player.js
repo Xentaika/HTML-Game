@@ -1,41 +1,102 @@
 const { MovementInput } = require('./movementInput');
 const { approach } = require('../util/math');
 const { resolvePlayerCollisions } = require('../game/arenaCollider');
+const { Weapon } = require('./weapon');
+const { WEAPON_PRESETS, DEFAULT_LOADOUT } = require('../config/weaponPresets');
+
+const createWeapon = (weaponId) => {
+  const preset = WEAPON_PRESETS[weaponId];
+  if (!preset) {
+    return null;
+  }
+  return new Weapon(preset);
+};
 
 class Player {
-  constructor(id, spawnPoint, config, character) {
+  constructor(id, spawnPoint, config) {
     this.id = id;
     this.config = config;
-    this.character = character;
     this.position = { ...spawnPoint };
     this.velocity = { x: 0, y: 0, z: 0 };
     this.quaternion = { x: 0, y: 0, z: 0, w: 1 };
+    this.pitch = 0;
     this.onGround = true;
     this.input = new MovementInput();
-    this.health = character.maxHealth;
+    this.health = 100;
     this.score = 0;
-    this.weapon = character.loadout.primary;
+    this.cash = 1000;
+    this.inventory = new Map();
+    this.activeSlot = 'secondary';
     this.lastUpdate = Date.now();
+    this.lastProcessedInput = 0;
 
-    if (this.weapon && typeof this.weapon.reset === 'function') {
-      this.weapon.reset();
+    this.initializeLoadout();
+    this.spawnPoint = { ...spawnPoint };
+  }
+
+  initializeLoadout() {
+    this.inventory.clear();
+    DEFAULT_LOADOUT.forEach((weaponId) => {
+      const instance = createWeapon(weaponId);
+      if (instance) {
+        this.inventory.set(instance.slot, instance);
+      }
+    });
+    if (!this.inventory.has('melee')) {
+      const knife = createWeapon('knife');
+      if (knife) {
+        this.inventory.set('melee', knife);
+      }
     }
+    this.equipSlot(this.inventory.has('secondary') ? 'secondary' : 'melee');
+  }
+
+  equipSlot(slot) {
+    if (!this.inventory.has(slot)) {
+      return false;
+    }
+    this.activeSlot = slot;
+    this.weapon = this.inventory.get(slot);
+    return true;
+  }
+
+  giveWeapon(weaponId, { equip = true } = {}) {
+    const instance = createWeapon(weaponId);
+    if (!instance) {
+      return null;
+    }
+    this.inventory.set(instance.slot, instance);
+    if (equip) {
+      this.equipSlot(instance.slot);
+    }
+    return instance;
+  }
+
+  hasWeaponSlot(slot) {
+    return this.inventory.has(slot);
   }
 
   resetForRespawn(spawnPoint) {
     this.position = { ...spawnPoint };
     this.velocity = { x: 0, y: 0, z: 0 };
     this.quaternion = { x: 0, y: 0, z: 0, w: 1 };
+    this.pitch = 0;
     this.onGround = true;
     this.input = new MovementInput();
-    this.health = this.character.maxHealth;
-    this.weapon = this.character.loadout.primary;
-    if (this.weapon && typeof this.weapon.reset === 'function') {
-      this.weapon.reset();
+    this.health = 100;
+    this.score = this.score;
+    this.lastUpdate = Date.now();
+    this.inventory.forEach((weapon) => weapon.reset());
+    if (!this.inventory.has('melee')) {
+      this.giveWeapon('knife', { equip: false });
     }
+    if (!this.inventory.has('secondary')) {
+      this.giveWeapon('glock18', { equip: false });
+    }
+    this.equipSlot(this.inventory.has('primary') ? this.activeSlot : 'secondary');
   }
 
-  updateQuaternion(quaternion) {
+  updateQuaternion(quaternion, pitch = null) {
     if (!quaternion) {
       return;
     }
@@ -50,11 +111,20 @@ class Player {
       z: z / length,
       w: w / length
     };
+    if (typeof pitch === 'number') {
+      this.pitch = pitch;
+    }
   }
 
   applyInput(payload) {
     this.input.setFromPayload(payload || {});
     this.lastUpdate = Date.now();
+    if (payload && typeof payload.pitch === 'number') {
+      this.pitch = payload.pitch;
+    }
+    if (this.input.sequence) {
+      this.lastProcessedInput = this.input.sequence;
+    }
   }
 
   applyGroundConstraint() {
@@ -128,7 +198,7 @@ class Player {
 
     const direction = this.getShootDirection();
     const origin = this.getShootOrigin(direction);
-    return { origin, direction };
+    return { origin, direction, weapon: this.weapon };
   }
 
   integrate(config, colliders) {
@@ -215,14 +285,28 @@ class Player {
     this.applyGroundConstraint();
   }
 
+  toInventoryState() {
+    const result = {};
+    this.inventory.forEach((weapon, slot) => {
+      result[slot] = weapon.toState();
+    });
+    return result;
+  }
+
   toSnapshot() {
     return {
       id: this.id,
       position: this.position,
       quaternion: this.quaternion,
+      pitch: this.pitch,
       velocity: this.velocity,
       health: this.health,
-      score: this.score
+      score: this.score,
+      cash: this.cash,
+      weapon: this.weapon ? this.weapon.toState() : null,
+      inventory: this.toInventoryState(),
+      activeSlot: this.activeSlot,
+      lastInputSequence: this.lastProcessedInput
     };
   }
 }

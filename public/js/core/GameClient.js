@@ -18,20 +18,20 @@ export class GameClient {
     this.renderer.outputEncoding = THREE.sRGBEncoding;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x050910);
+    this.scene.background = new THREE.Color(0x0b1014);
 
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
     this.controls = new SmoothPointerLockControls(this.camera, this.renderer.domElement, {
-      pointerSpeed: 0.22,
-      smoothingFactor: 0,
-      maxRotationStep: Infinity
+      pointerSpeed: 0.18,
+      smoothingFactor: 0.08,
+      maxRotationStep: 0.045
     });
     this.scene.add(this.controls.getObject());
 
     this.clock = new THREE.Clock();
 
     this.hud = new HUDOverlay();
-    this.player = new LocalPlayer(this.controls);
+    this.player = new LocalPlayer(this.controls, this.camera);
     this.remotePlayers = new RemotePlayerManager(this.scene, this.camera);
     this.input = new InputController(this.controls, this.hud);
 
@@ -46,15 +46,13 @@ export class GameClient {
     this.awaitingPing = false;
     this.pingTimeoutId = null;
 
-    this.input.onInput = () => {
-      this.inputDirty = true;
-    };
-    this.input.onFire = () => this.fireWeapon();
-    this.input.onReload = () => this.reloadWeapon();
-    this.input.onConnectRequest = () => this.connect();
-
     this.inputDirty = false;
     this.inputAccumulator = 0;
+
+    this.buyZones = [];
+    this.buyMenuActive = false;
+    this.wasLockedBeforeBuy = false;
+    this.lastSnapshotPlayers = [];
 
     this.setupLighting();
     this.buildArena();
@@ -64,12 +62,16 @@ export class GameClient {
   }
 
   setupLighting() {
-    const ambient = new THREE.AmbientLight(0x7ddaff, 0.3);
+    const ambient = new THREE.AmbientLight(0xb0c4d0, 0.3);
     this.scene.add(ambient);
 
-    const directional = new THREE.DirectionalLight(0x00bfff, 0.6);
-    directional.position.set(10, 20, 8);
-    this.scene.add(directional);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    keyLight.position.set(18, 26, -12);
+    keyLight.castShadow = false;
+    this.scene.add(keyLight);
+
+    const fillLight = new THREE.HemisphereLight(0xb4c7d6, 0x1a1f23, 0.35);
+    this.scene.add(fillLight);
   }
 
   buildArena() {
@@ -87,6 +89,16 @@ export class GameClient {
         this.controls.lock();
       });
     }
+
+    this.input.onInput = () => {
+      this.inputDirty = true;
+    };
+    this.input.onFire = () => this.fireWeapon();
+    this.input.onReload = () => this.reloadWeapon();
+    this.input.onConnectRequest = () => this.connect();
+    this.input.onBuyToggle = (show) => this.toggleBuyMenu(show);
+    this.input.onSwitchWeapon = (slot) => this.switchWeapon(slot);
+    this.input.onScoreboardToggle = (show) => this.toggleScoreboard(show);
   }
 
   handleResize() {
@@ -122,7 +134,7 @@ export class GameClient {
       this.networkStats.targetTickRate = typeof tickRate === 'number' ? tickRate : null;
       this.resetNetworkStats({ preserveTarget: true });
       if (snapshot) {
-        this.applySnapshot(snapshot);
+        this.applySnapshot(snapshot, { immediate: true });
         this.handleSnapshotTiming(snapshot);
       }
       const quaternion = this.controls.getObject().quaternion;
@@ -165,10 +177,7 @@ export class GameClient {
       if (targetId === this.player.id) {
         this.player.health = remaining;
         if (remaining <= 0) {
-          this.hud.addFeedEntry(
-            `Вы были устранены игроком ${shooterId.slice(0, 6)}${headshot ? ' (хедшот)' : ''}`,
-            headshot
-          );
+          this.hud.addFeedEntry(`Вы были устранены ${shooterId.slice(0, 6)}${headshot ? ' (хедшот)' : ''}`, headshot);
         } else {
           this.hud.addFeedEntry(`Вас ранил ${shooterId.slice(0, 6)} (${damage})`, headshot);
         }
@@ -184,7 +193,7 @@ export class GameClient {
       }
     });
 
-    socket.on('playerEliminated', ({ targetId, killerId, respawn, score }) => {
+    socket.on('playerEliminated', ({ targetId, killerId, respawn, score, cash }) => {
       if (targetId === this.player.id) {
         this.player.resetOnRespawn(respawn);
         this.hud.setReloadIndicator(false);
@@ -193,8 +202,11 @@ export class GameClient {
         this.remotePlayers.setRespawn(targetId, respawn);
       }
 
-      if (killerId === this.player.id && typeof score === 'number') {
-        this.player.score = score;
+      if (killerId === this.player.id) {
+        this.player.score = typeof score === 'number' ? score : this.player.score + 1;
+        if (cash != null) {
+          this.player.cash = cash;
+        }
         this.hud.updatePlayerStats(this.player);
         this.hud.addFeedEntry(`Вы устранили ${targetId.slice(0, 6)}!`);
       } else if (targetId === this.player.id) {
@@ -203,20 +215,72 @@ export class GameClient {
         this.hud.addFeedEntry(`${killerId.slice(0, 6)} устранил ${targetId.slice(0, 6)}`);
       }
     });
+
+    socket.on('weaponFired', ({ shooterId, weapon }) => {
+      if (!weapon) {
+        return;
+      }
+      if (shooterId === this.player.id) {
+        this.player.weapon.updateFromServer(weapon);
+        this.hud.updatePlayerStats(this.player);
+      } else {
+        this.remotePlayers.onWeaponFire(shooterId, weapon);
+      }
+    });
+
+    socket.on('weaponReload', ({ playerId, weapon }) => {
+      if (playerId === this.player.id) {
+        if (weapon) {
+          this.player.weapon.updateFromServer(weapon);
+        }
+        this.player.onReload(this.player.weapon.reloadDuration);
+        this.hud.setReloadIndicator(true);
+      } else {
+        this.remotePlayers.onWeaponReload(playerId, weapon);
+      }
+    });
+
+    socket.on('inventoryUpdate', (payload) => {
+      if (!payload || !payload.ok) {
+        return;
+      }
+      if (typeof payload.cash === 'number') {
+        this.player.cash = payload.cash;
+      }
+      if (payload.inventory) {
+        this.player.syncInventory(payload.inventory);
+      }
+      if (payload.activeSlot) {
+        this.player.setActiveSlot(payload.activeSlot);
+      }
+      if (payload.weapon) {
+        this.player.weapon.updateFromServer(payload.weapon);
+      }
+      this.hud.updatePlayerStats(this.player);
+      if (this.buyMenuActive) {
+        this.hud.renderBuyMenu(this.player.cash, this.player.inventory, (weaponId) => this.requestPurchase(weaponId));
+      }
+    });
   }
 
-  applySnapshot(snapshot) {
+  applySnapshot(snapshot, options = {}) {
     if (!snapshot || !Array.isArray(snapshot.players)) {
       return;
+    }
+    this.lastSnapshotPlayers = snapshot.players;
+    if (Array.isArray(snapshot.buyZones)) {
+      this.buyZones = snapshot.buyZones;
     }
     snapshot.players.forEach((info) => {
       if (!info || !info.id) {
         return;
       }
       if (info.id === this.player.id) {
-        this.player.applySnapshot(info);
+        this.player.applySnapshot(info, options);
         this.player.health = info.health;
         this.player.score = info.score;
+        this.player.cash = info.cash ?? this.player.cash;
+        this.player.armor = info.armor ?? this.player.armor;
         this.hud.updatePlayerStats(this.player);
       } else {
         const avatar = this.remotePlayers.ensure(info.id);
@@ -227,7 +291,7 @@ export class GameClient {
   }
 
   sendInput(delta) {
-    if (!socket.connected || !this.player.id) {
+    if (!socket.connected || !this.player.id || this.buyMenuActive) {
       return;
     }
     this.inputAccumulator += delta;
@@ -238,6 +302,7 @@ export class GameClient {
     }
 
     const payload = this.input.buildInputPayload();
+    this.player.applyLocalInput(payload, this.inputAccumulator);
     socket.emit('input', payload);
     this.inputAccumulator = 0;
     this.inputDirty = false;
@@ -245,47 +310,127 @@ export class GameClient {
   }
 
   fireWeapon() {
-    if (!socket.connected || !this.player.id) {
+    if (!socket.connected || !this.player.id || this.buyMenuActive) {
       return;
     }
     const now = performance.now() / 1000;
     if (!this.player.weapon.canShoot(now)) {
-      if (this.player.weapon.ammo === 0) {
+      if ((this.player.weapon.ammo ?? 0) === 0) {
         this.reloadWeapon();
       }
       return;
     }
 
-    if (this.player.weapon.shoot(now)) {
-      this.hud.animateCrosshair('fire');
-      this.hud.updatePlayerStats(this.player);
-      const origin = this.controls.getObject().position.clone();
-      const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-      socket.emit('shoot', {
-        origin: { x: origin.x, y: origin.y, z: origin.z },
-        direction: { x: direction.x, y: direction.y, z: direction.z }
-      });
-      this.inputDirty = true;
-    }
+    this.player.onFire(now);
+    this.hud.animateCrosshair('fire');
+    this.hud.updatePlayerStats(this.player);
+    socket.emit('shoot');
+    this.inputDirty = true;
   }
 
   reloadWeapon() {
-    if (!socket.connected || !this.player.id) {
+    if (!socket.connected || !this.player.id || this.buyMenuActive) {
       return;
     }
     const now = performance.now() / 1000;
     if (this.player.weapon.startReload(now)) {
       socket.emit('reload');
+      this.player.onReload(this.player.weapon.reloadDuration);
       this.hud.setReloadIndicator(true);
       this.hud.addFeedEntry('Перезарядка…');
     }
   }
 
-  updateWeapon(time) {
-    if (this.player.weapon.update(time)) {
-      this.hud.setReloadIndicator(false);
-      this.hud.updatePlayerStats(this.player);
+  toggleBuyMenu(show) {
+    if (show) {
+      if (!socket.connected) {
+        return;
+      }
+      if (!this.isPlayerInBuyZone()) {
+        this.hud.setBuyPrompt(true);
+        return;
+      }
+      if (!this.buyMenuActive) {
+        this.wasLockedBeforeBuy = this.controls.isLocked;
+        if (this.controls.isLocked) {
+          this.controls.unlock();
+        }
+        if (this.hud.overlay) {
+          this.hud.overlay.style.pointerEvents = 'auto';
+        }
+        this.buyMenuActive = true;
+        this.hud.setBuyPrompt(false);
+        this.hud.toggleBuyMenu(true);
+        this.hud.renderBuyMenu(this.player.cash, this.player.inventory, (weaponId) => this.requestPurchase(weaponId));
+      }
+    } else {
+      this.hud.setBuyPrompt(false);
+      if (!this.buyMenuActive) {
+        return;
+      }
+      this.buyMenuActive = false;
+      this.hud.toggleBuyMenu(false);
+      if (this.hud.overlay) {
+        this.hud.overlay.style.pointerEvents = 'none';
+      }
+      if (this.wasLockedBeforeBuy) {
+        this.controls.lock();
+      }
+      this.wasLockedBeforeBuy = false;
     }
+  }
+
+  requestPurchase(weaponId) {
+    if (!socket.connected) {
+      return;
+    }
+    socket.emit('buyWeapon', weaponId, (response) => {
+      if (!response || !response.ok) {
+        this.hud.addFeedEntry('Покупка не удалась');
+        return;
+      }
+      this.hud.addFeedEntry(`Покупка: ${weaponId}`);
+    });
+  }
+
+  switchWeapon(slot) {
+    if (!socket.connected || !this.player.id) {
+      return;
+    }
+    socket.emit('switchWeapon', slot, (response) => {
+      if (response && response.ok && response.weapon) {
+        this.player.setActiveSlot(response.activeSlot || slot);
+        this.player.weapon.updateFromServer(response.weapon);
+        this.hud.updatePlayerStats(this.player);
+      }
+    });
+  }
+
+  toggleScoreboard(show) {
+    this.hud.toggleScoreboard(show, this.lastSnapshotPlayers);
+  }
+
+  isPlayerInBuyZone() {
+    if (!this.buyZones || this.buyZones.length === 0) {
+      return false;
+    }
+    const position = this.controls.getObject().position;
+    return this.buyZones.some(({ position: zonePos, radius }) => {
+      if (!zonePos) {
+        return false;
+      }
+      const dx = position.x - zonePos.x;
+      const dz = position.z - zonePos.z;
+      return Math.hypot(dx, dz) <= (radius || 0) + 0.5;
+    });
+  }
+
+  updateBuyPrompt() {
+    if (this.buyMenuActive) {
+      this.hud.setBuyPrompt(false);
+      return;
+    }
+    this.hud.setBuyPrompt(this.isPlayerInBuyZone());
   }
 
   resetNetworkStats({ preserveTarget = false } = {}) {
@@ -361,9 +506,7 @@ export class GameClient {
       if (tickDelta > 0 && timeDelta > 0) {
         const estimatedRate = tickDelta / timeDelta;
         this.networkStats.tickRate =
-          this.networkStats.tickRate == null
-            ? estimatedRate
-            : THREE.MathUtils.lerp(this.networkStats.tickRate, estimatedRate, 0.2);
+          this.networkStats.tickRate == null ? estimatedRate : THREE.MathUtils.lerp(this.networkStats.tickRate, estimatedRate, 0.2);
       }
     }
     this.networkStats.lastTick = snapshot.tick;
@@ -381,7 +524,13 @@ export class GameClient {
     this.player.update(delta);
     this.remotePlayers.update(delta);
     this.remotePlayers.updateNameplates();
-    this.updateWeapon(now);
+    if (this.player.weapon.reloading && now >= this.player.weapon.reloadEndTime) {
+      if (this.player.weapon.finishReload()) {
+        this.hud.setReloadIndicator(false);
+        this.hud.updatePlayerStats(this.player);
+      }
+    }
+    this.updateBuyPrompt();
 
     this.renderer.render(this.scene, this.camera);
   }

@@ -59,9 +59,14 @@ export class RemotePlayerManager {
     if (!avatar) {
       return;
     }
-    avatar.bodyMaterial.color.set(headshot ? 0xff3b81 : 0x37d3ff);
+    const original = avatar.bodyRoot.children[0];
+    if (!original || !original.material) {
+      return;
+    }
+    const baseColor = original.material.color.clone();
+    original.material.color.set(headshot ? 0xc3423f : 0x4aa564);
     setTimeout(() => {
-      avatar.bodyMaterial.color.set(0x3bf5ff);
+      original.material.color.copy(baseColor);
     }, 420);
   }
 
@@ -74,5 +79,25 @@ export class RemotePlayerManager {
     avatar.targetPosition.copy(avatar.position);
     avatar.group.position.copy(avatar.position);
     avatar.health = 100;
+  }
+
+  onWeaponReload(playerId, weapon) {
+    const avatar = this.players.get(playerId);
+    if (!avatar) {
+      return;
+    }
+    avatar.setWeapon(weapon);
+    const now = Date.now() / 1000;
+    const duration = weapon && weapon.reloadEndTime ? Math.max(0.4, weapon.reloadEndTime - now) : 1.6;
+    avatar.setReloading(duration);
+  }
+
+  onWeaponFire(playerId, weapon) {
+    const avatar = this.players.get(playerId);
+    if (!avatar) {
+      return;
+    }
+    avatar.setWeapon(weapon);
+    avatar.triggerFire();
   }
 }
