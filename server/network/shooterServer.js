@@ -38,7 +38,8 @@ class ShooterServer {
 
       socket.emit('init', {
         id: socket.id,
-        snapshot: this.world.getSnapshot()
+        snapshot: this.world.getSnapshot(),
+        tickRate: this.config.tickRate
       });
 
       socket.broadcast.emit('playerJoined', player.toSnapshot());
@@ -47,6 +48,12 @@ class ShooterServer {
         this.world.updatePlayerInput(socket.id, payload);
         if (payload && payload.quaternion) {
           this.world.updatePlayerQuaternion(socket.id, payload.quaternion);
+        }
+      });
+
+      socket.on('clientPing', (_, respond) => {
+        if (typeof respond === 'function') {
+          respond({ serverTime: Date.now(), tick: this.world.tick });
         }
       });
 

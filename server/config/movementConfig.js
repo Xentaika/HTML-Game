@@ -1,6 +1,6 @@
 class MovementConfig {
   constructor() {
-    this.tickRate = 128;
+    this.tickRate = 64;
     this.fixedDelta = 1 / this.tickRate;
     this.gravity = 30;
     this.playerRadius = 0.6;

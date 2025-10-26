@@ -244,6 +244,43 @@ body {
   letter-spacing: 0.1em;
 }
 
+.metrics {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  display: grid;
+  gap: 8px;
+  padding: 12px 18px;
+  background: linear-gradient(135deg, rgba(11, 20, 42, 0.82), rgba(6, 12, 32, 0.72));
+  border-radius: 14px;
+  border: 1px solid rgba(0, 246, 255, 0.18);
+  box-shadow: 0 16px 28px rgba(5, 10, 24, 0.5);
+  backdrop-filter: blur(14px);
+  pointer-events: none;
+  min-width: 160px;
+}
+
+.metric {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.metric .label {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.metric .value {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
 .opponent {
   position: absolute;
 }

@@ -9,6 +9,9 @@ export class HUDOverlay {
     this.scoreDisplay = document.getElementById('scoreDisplay');
     this.eventFeed = document.getElementById('eventFeed');
     this.connectionStatus = document.getElementById('connectionStatus');
+    this.serverStats = document.getElementById('serverStats');
+    this.pingValue = document.getElementById('pingValue');
+    this.tickValue = document.getElementById('tickValue');
     this.crosshair = document.getElementById('crosshair');
     this.hitMarker = document.getElementById('hitMarker');
 
@@ -59,6 +62,43 @@ export class HUDOverlay {
       this.connectionStatus.classList.remove('hidden');
     } else {
       this.connectionStatus.classList.add('hidden');
+    }
+  }
+
+  updateServerStats(stats) {
+    if (!this.serverStats) {
+      return;
+    }
+
+    const hasData = Boolean(
+      stats && (stats.ping != null || stats.tickRate != null || stats.targetTickRate != null)
+    );
+
+    if (!hasData) {
+      this.serverStats.classList.add('hidden');
+      if (this.pingValue) {
+        this.pingValue.textContent = '—';
+      }
+      if (this.tickValue) {
+        this.tickValue.textContent = '—';
+      }
+      return;
+    }
+
+    this.serverStats.classList.remove('hidden');
+
+    if (this.pingValue) {
+      this.pingValue.textContent = stats.ping != null ? `${Math.round(stats.ping)} мс` : '—';
+    }
+
+    if (this.tickValue) {
+      const tickRateText =
+        stats.tickRate != null
+          ? `${Math.round(stats.tickRate)} тиков/с`
+          : stats.targetTickRate != null
+          ? `${Math.round(stats.targetTickRate)} тиков/с`
+          : '—';
+      this.tickValue.textContent = tickRateText;
     }
   }
 

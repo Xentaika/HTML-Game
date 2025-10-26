@@ -35,6 +35,17 @@ export class GameClient {
     this.remotePlayers = new RemotePlayerManager(this.scene, this.camera);
     this.input = new InputController(this.controls, this.hud);
 
+    this.networkStats = {
+      ping: null,
+      tickRate: null,
+      targetTickRate: null,
+      lastTick: null,
+      lastTime: null
+    };
+    this.pingIntervalId = null;
+    this.awaitingPing = false;
+    this.pingTimeoutId = null;
+
     this.input.onInput = () => {
       this.inputDirty = true;
     };
@@ -94,18 +105,25 @@ export class GameClient {
 
   setupSocket() {
     socket.on('connect', () => {
+      this.resetNetworkStats();
+      this.startPingMonitor();
       this.hud.setConnectionStatus('Подключено', false);
     });
 
     socket.on('disconnect', () => {
+      this.stopPingMonitor();
+      this.resetNetworkStats();
       this.hud.setConnectionStatus('Отключено от сервера');
     });
 
-    socket.on('init', ({ id, snapshot }) => {
+    socket.on('init', ({ id, snapshot, tickRate }) => {
       this.player.id = id;
       this.hud.toggleStartPrompt(false);
+      this.networkStats.targetTickRate = typeof tickRate === 'number' ? tickRate : null;
+      this.resetNetworkStats({ preserveTarget: true });
       if (snapshot) {
         this.applySnapshot(snapshot);
+        this.handleSnapshotTiming(snapshot);
       }
       const quaternion = this.controls.getObject().quaternion;
       this.input.orientationCache.copy(quaternion);
@@ -135,6 +153,7 @@ export class GameClient {
         return;
       }
       this.applySnapshot(snapshot);
+      this.handleSnapshotTiming(snapshot);
     });
 
     socket.on('playerLeft', ({ id }) => {
@@ -267,6 +286,89 @@ export class GameClient {
       this.hud.setReloadIndicator(false);
       this.hud.updatePlayerStats(this.player);
     }
+  }
+
+  resetNetworkStats({ preserveTarget = false } = {}) {
+    this.networkStats.ping = null;
+    this.networkStats.tickRate = null;
+    this.networkStats.lastTick = null;
+    this.networkStats.lastTime = null;
+    if (!preserveTarget) {
+      this.networkStats.targetTickRate = null;
+    }
+    this.updateNetworkStatsDisplay();
+  }
+
+  updateNetworkStatsDisplay() {
+    this.hud.updateServerStats({
+      ping: this.networkStats.ping,
+      tickRate: this.networkStats.tickRate,
+      targetTickRate: this.networkStats.targetTickRate
+    });
+  }
+
+  startPingMonitor() {
+    if (this.pingIntervalId || !socket.connected) {
+      return;
+    }
+    this.measurePing();
+    this.pingIntervalId = setInterval(() => this.measurePing(), 2000);
+  }
+
+  stopPingMonitor() {
+    if (this.pingIntervalId) {
+      clearInterval(this.pingIntervalId);
+      this.pingIntervalId = null;
+    }
+    if (this.pingTimeoutId) {
+      clearTimeout(this.pingTimeoutId);
+      this.pingTimeoutId = null;
+    }
+    this.awaitingPing = false;
+  }
+
+  measurePing() {
+    if (!socket.connected || this.awaitingPing) {
+      return;
+    }
+    this.awaitingPing = true;
+    const start = performance.now();
+    if (this.pingTimeoutId) {
+      clearTimeout(this.pingTimeoutId);
+    }
+    this.pingTimeoutId = setTimeout(() => {
+      this.awaitingPing = false;
+      this.pingTimeoutId = null;
+    }, 1200);
+    socket.emit('clientPing', { start }, () => {
+      this.awaitingPing = false;
+      if (this.pingTimeoutId) {
+        clearTimeout(this.pingTimeoutId);
+        this.pingTimeoutId = null;
+      }
+      this.networkStats.ping = performance.now() - start;
+      this.updateNetworkStatsDisplay();
+    });
+  }
+
+  handleSnapshotTiming(snapshot) {
+    if (!snapshot || typeof snapshot.tick !== 'number' || typeof snapshot.time !== 'number') {
+      return;
+    }
+    if (this.networkStats.lastTick != null && this.networkStats.lastTime != null) {
+      const tickDelta = snapshot.tick - this.networkStats.lastTick;
+      const timeDelta = snapshot.time - this.networkStats.lastTime;
+      if (tickDelta > 0 && timeDelta > 0) {
+        const estimatedRate = tickDelta / timeDelta;
+        this.networkStats.tickRate =
+          this.networkStats.tickRate == null
+            ? estimatedRate
+            : THREE.MathUtils.lerp(this.networkStats.tickRate, estimatedRate, 0.2);
+      }
+    }
+    this.networkStats.lastTick = snapshot.tick;
+    this.networkStats.lastTime = snapshot.time;
+    this.updateNetworkStatsDisplay();
   }
 
   animate() {
