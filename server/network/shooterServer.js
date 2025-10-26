@@ -12,7 +12,7 @@ class ShooterServer {
 
     this.app = express();
     this.server = http.createServer(this.app);
-    this.io = new Server(this.server);
+    this.io = new Server(this.server, { cors: { origin: '*' } });
 
     this.setupStatic();
     this.setupSockets();
@@ -44,10 +44,10 @@ class ShooterServer {
 
       socket.broadcast.emit('playerJoined', player.toSnapshot());
 
-      socket.on('input', (payload) => {
+      socket.on('input', (payload = {}) => {
         this.world.updatePlayerInput(socket.id, payload);
-        if (payload && payload.quaternion) {
-          this.world.updatePlayerQuaternion(socket.id, payload.quaternion);
+        if (payload.quaternion) {
+          this.world.updatePlayerQuaternion(socket.id, payload.quaternion, payload.pitch);
         }
       });
 
@@ -58,24 +58,58 @@ class ShooterServer {
       });
 
       socket.on('shoot', () => {
-        const result = this.world.registerHit(socket.id);
+        const result = this.world.registerShot(socket.id);
         if (!result) {
           return;
         }
-
-        this.io.emit('playerHit', result);
-        if (result.respawn) {
-          this.io.emit('playerEliminated', {
-            targetId: result.targetId,
-            killerId: result.shooterId,
-            respawn: result.respawn,
-            score: result.score
-          });
+        if (result.shot) {
+          this.io.emit('weaponFired', { shooterId: result.shot.shooterId, weapon: result.shot.weapon });
+        }
+        if (result.hit) {
+          this.io.emit('playerHit', result.hit);
+          if (result.hit.respawn) {
+            this.io.emit('playerEliminated', {
+              targetId: result.hit.targetId,
+              killerId: result.hit.shooterId,
+              respawn: result.hit.respawn,
+              score: result.hit.score,
+              cash: result.hit.cash
+            });
+          }
         }
       });
 
       socket.on('reload', () => {
-        this.world.requestReload(socket.id);
+        const started = this.world.requestReload(socket.id);
+        if (started) {
+          const player = this.world.players.get(socket.id);
+          if (player && player.weapon) {
+            this.io.emit('weaponReload', {
+              playerId: socket.id,
+              weapon: player.weapon.toState()
+            });
+          }
+        }
+      });
+
+      socket.on('buyWeapon', (weaponId, respond) => {
+        const result = this.world.handleBuyRequest(socket.id, weaponId);
+        if (typeof respond === 'function') {
+          respond(result);
+        }
+        if (result.ok) {
+          socket.emit('inventoryUpdate', result);
+        }
+      });
+
+      socket.on('switchWeapon', (slot, respond) => {
+        const result = this.world.handleSwitchRequest(socket.id, slot);
+        if (typeof respond === 'function') {
+          respond(result);
+        }
+        if (result.ok) {
+          socket.emit('inventoryUpdate', result);
+        }
       });
 
       socket.on('disconnect', () => {

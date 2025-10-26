@@ -7,12 +7,17 @@ export class InputController {
     this.keys = {};
     this.pointerLocked = false;
     this.pendingJump = false;
-    this.inputAccumulator = 0;
+    this.sequence = 0;
     this.orientationCache = new THREE.Quaternion();
+
     this.onInput = () => {};
     this.onFire = () => {};
     this.onReload = () => {};
     this.onConnectRequest = () => {};
+    this.onBuyToggle = () => {};
+    this.onSwitchWeapon = () => {};
+    this.onScoreboardToggle = () => {};
+
     this.bindEvents();
   }
 
@@ -22,17 +27,44 @@ export class InputController {
         return;
       }
       this.keys[event.code] = true;
+
       if (event.code === 'Space') {
         this.pendingJump = true;
       }
+
       if (event.code === 'KeyR') {
         this.onReload();
       }
+
+      if (event.code === 'KeyB') {
+        this.onBuyToggle(true);
+      }
+
+      if (event.code === 'Tab') {
+        event.preventDefault();
+        this.onScoreboardToggle(true);
+      }
+
+      if (event.code === 'Digit1') {
+        this.onSwitchWeapon('primary');
+      } else if (event.code === 'Digit2') {
+        this.onSwitchWeapon('secondary');
+      } else if (event.code === 'Digit3') {
+        this.onSwitchWeapon('melee');
+      }
+
       this.onInput();
     });
 
     document.addEventListener('keyup', (event) => {
       this.keys[event.code] = false;
+      if (event.code === 'KeyB') {
+        this.onBuyToggle(false);
+      }
+      if (event.code === 'Tab') {
+        event.preventDefault();
+        this.onScoreboardToggle(false);
+      }
       this.onInput();
     });
 
@@ -61,12 +93,23 @@ export class InputController {
         this.hud.overlay.style.pointerEvents = 'auto';
       }
       this.hud.toggleStartPrompt(true);
+      this.onBuyToggle(false);
+      this.onScoreboardToggle(false);
     });
   }
 
-  buildInputPayload() {
+  _extractPitch() {
     const quaternion = this.controls.getObject().quaternion;
-    return {
+    const euler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ');
+    return euler.x;
+  }
+
+  buildInputPayload() {
+    const object = this.controls.getObject();
+    const quaternion = object.quaternion;
+    const payload = {
+      sequence: ++this.sequence,
+      timestamp: performance.now() / 1000,
       forward: this.keys['KeyW'] || false,
       backward: this.keys['KeyS'] || false,
       left: this.keys['KeyA'] || false,
@@ -78,13 +121,15 @@ export class InputController {
         y: quaternion.y,
         z: quaternion.z,
         w: quaternion.w
-      }
+      },
+      pitch: this._extractPitch()
     };
+    return payload;
   }
 
   trackOrientationChanges() {
     const quaternion = this.controls.getObject().quaternion;
-    const threshold = 0.00008;
+    const threshold = 0.00004;
     const changed =
       Math.abs(quaternion.x - this.orientationCache.x) > threshold ||
       Math.abs(quaternion.y - this.orientationCache.y) > threshold ||

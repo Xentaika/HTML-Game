@@ -1,8 +1,9 @@
-const { Character } = require('../entities/character');
 const { Player } = require('../entities/player');
-const { Weapon } = require('../entities/weapon');
 const { ArenaCollider } = require('./arenaCollider');
 const { normalize, distancePointToLine } = require('../util/math');
+const { WEAPON_PRESETS } = require('../config/weaponPresets');
+
+const BUY_REWARD_KILL = 300;
 
 class GameWorld {
   constructor(config) {
@@ -22,16 +23,10 @@ class GameWorld {
       new ArenaCollider({ x: 12, y: 3, z: 10 }, { x: 4, y: 6, z: 4 }),
       new ArenaCollider({ x: -14, y: 2.5, z: -8 }, { x: 5, y: 5, z: 5 })
     ];
-  }
-
-  createDefaultCharacter() {
-    return new Character({
-      name: 'Initiate',
-      maxHealth: 100,
-      loadout: {
-        primary: new Weapon({})
-      }
-    });
+    this.buyZones = [
+      { position: { x: 0, y: config.groundLevel, z: 0 }, radius: 6 },
+      { position: { x: 10, y: config.groundLevel, z: -5 }, radius: 5 }
+    ];
   }
 
   getRandomRespawn() {
@@ -40,8 +35,7 @@ class GameWorld {
 
   addPlayer(id) {
     const spawn = this.getRandomRespawn();
-    const character = this.createDefaultCharacter();
-    const player = new Player(id, spawn, this.config, character);
+    const player = new Player(id, spawn, this.config);
     this.players.set(id, player);
     return player;
   }
@@ -58,12 +52,67 @@ class GameWorld {
     player.applyInput(input);
   }
 
-  updatePlayerQuaternion(id, quaternion) {
+  updatePlayerQuaternion(id, quaternion, pitch) {
     const player = this.players.get(id);
     if (!player) {
       return;
     }
-    player.updateQuaternion(quaternion);
+    player.updateQuaternion(quaternion, pitch);
+  }
+
+  isInBuyZone(player) {
+    if (!player) {
+      return false;
+    }
+    return this.buyZones.some(({ position, radius }) => {
+      const dx = player.position.x - position.x;
+      const dz = player.position.z - position.z;
+      return Math.hypot(dx, dz) <= radius + 0.2;
+    });
+  }
+
+  handleBuyRequest(id, weaponId) {
+    const player = this.players.get(id);
+    if (!player) {
+      return { ok: false, reason: 'not_found' };
+    }
+    const preset = WEAPON_PRESETS[weaponId];
+    if (!preset) {
+      return { ok: false, reason: 'unknown_weapon' };
+    }
+    if (!this.isInBuyZone(player)) {
+      return { ok: false, reason: 'not_in_zone' };
+    }
+    if (player.cash < preset.price) {
+      return { ok: false, reason: 'not_enough_cash' };
+    }
+
+    player.cash -= preset.price;
+    player.giveWeapon(weaponId, { equip: true });
+
+    return {
+      ok: true,
+      cash: player.cash,
+      activeSlot: player.activeSlot,
+      weapon: player.weapon ? player.weapon.toState() : null,
+      inventory: player.toInventoryState()
+    };
+  }
+
+  handleSwitchRequest(id, slot) {
+    const player = this.players.get(id);
+    if (!player) {
+      return { ok: false, reason: 'not_found' };
+    }
+    if (!slot || !player.hasWeaponSlot(slot)) {
+      return { ok: false, reason: 'no_weapon' };
+    }
+    player.equipSlot(slot);
+    return {
+      ok: true,
+      activeSlot: player.activeSlot,
+      weapon: player.weapon ? player.weapon.toState() : null
+    };
   }
 
   step() {
@@ -85,7 +134,8 @@ class GameWorld {
     return {
       tick: this.tick,
       time: Date.now() / 1000,
-      players: this.serializePlayers()
+      players: this.serializePlayers(),
+      buyZones: this.buyZones
     };
   }
 
@@ -108,92 +158,125 @@ class GameWorld {
     return player.weapon.startReload(now);
   }
 
-  registerHit(shooterId) {
+  registerShot(shooterId) {
     const shooter = this.players.get(shooterId);
     if (!shooter) {
       return null;
     }
 
-    const weapon = shooter.weapon;
     const now = Date.now() / 1000;
     const shot = shooter.prepareShot(now);
     if (!shot) {
       return null;
     }
 
-    const { origin, direction } = shot;
+    const { origin, direction, weapon } = shot;
     const dir = normalize(direction);
-    if (dir.x === 0 && dir.y === 0 && dir.z === 0) {
-      return null;
-    }
     let bestHit = null;
 
-    this.players.forEach((target, targetId) => {
-      if (targetId === shooterId || target.health <= 0) {
-        return;
+    if (weapon.slot === 'melee') {
+      this.players.forEach((target, targetId) => {
+        if (targetId === shooterId || target.health <= 0) {
+          return;
+        }
+        const dx = target.position.x - shooter.position.x;
+        const dz = target.position.z - shooter.position.z;
+        const distance = Math.hypot(dx, dz);
+        if (distance <= weapon.range) {
+          const damage = weapon.bodyDamage;
+          if (!bestHit || distance < bestHit.distance) {
+            bestHit = {
+              target,
+              damage,
+              headshot: false,
+              distance
+            };
+          }
+        }
+      });
+    } else {
+      if (dir.x === 0 && dir.y === 0 && dir.z === 0) {
+        return { shot: { shooterId, weapon: weapon.toState() } };
       }
 
-      const headCenter = {
-        x: target.position.x,
-        y: target.position.y + 0.35,
-        z: target.position.z
-      };
-      const bodyCenter = {
-        x: target.position.x,
-        y: target.position.y - 0.6,
-        z: target.position.z
-      };
+      this.players.forEach((target, targetId) => {
+        if (targetId === shooterId || target.health <= 0) {
+          return;
+        }
 
-      const headData = distancePointToLine(headCenter, origin, dir);
-      const bodyData = distancePointToLine(bodyCenter, origin, dir);
+        const headCenter = {
+          x: target.position.x,
+          y: target.position.y + 0.35,
+          z: target.position.z
+        };
+        const bodyCenter = {
+          x: target.position.x,
+          y: target.position.y - 0.6,
+          z: target.position.z
+        };
 
-      const withinRange = (data) => data.alongRay > 0 && data.alongRay < 80;
+        const headData = distancePointToLine(headCenter, origin, dir);
+        const bodyData = distancePointToLine(bodyCenter, origin, dir);
 
-      let damage = 0;
-      let headshot = false;
-      let along = Infinity;
+        const withinRange = (data) => data.alongRay > 0 && data.alongRay < weapon.range;
 
-      if (withinRange(headData) && headData.distance <= 0.35) {
-        damage = weapon.headshotDamage;
-        headshot = true;
-        along = headData.alongRay;
-      } else if (withinRange(bodyData) && bodyData.distance <= 0.65) {
-        damage = weapon.bodyDamage;
-        along = bodyData.alongRay;
-      }
+        let damage = 0;
+        let headshot = false;
+        let along = Infinity;
 
-      if (damage > 0 && (!bestHit || along < bestHit.along)) {
-        bestHit = { target, damage, headshot, along };
-      }
-    });
+        if (withinRange(headData) && headData.distance <= 0.35) {
+          damage = weapon.headshotDamage;
+          headshot = true;
+          along = headData.alongRay;
+        } else if (withinRange(bodyData) && bodyData.distance <= 0.65) {
+          damage = weapon.bodyDamage;
+          along = bodyData.alongRay;
+        }
 
-    if (!bestHit) {
-      return null;
+        if (damage > 0 && (!bestHit || along < bestHit.along)) {
+          bestHit = { target, damage, headshot, along };
+        }
+      });
     }
 
-    const { target, damage, headshot } = bestHit;
-    this.applyDamage(target, damage);
+    let hitResult = null;
 
-    let respawnPosition = null;
-    let newScore = null;
+    if (bestHit) {
+      const { target, damage, headshot } = bestHit;
+      this.applyDamage(target, damage);
+      let respawnPosition = null;
+      let newScore = null;
+      let killerCash = null;
 
-    if (target.health === 0) {
-      const killer = this.players.get(shooterId);
-      if (killer) {
-        killer.score += 1;
-        newScore = killer.score;
+      if (target.health === 0) {
+        const killer = this.players.get(shooterId);
+        if (killer) {
+          killer.score += 1;
+          killer.cash += BUY_REWARD_KILL;
+          newScore = killer.score;
+          killerCash = killer.cash;
+        }
+        respawnPosition = this.respawn(target);
       }
-      respawnPosition = this.respawn(target);
+
+      hitResult = {
+        shooterId,
+        targetId: target.id,
+        damage,
+        headshot,
+        remaining: target.health,
+        respawn: respawnPosition,
+        score: newScore,
+        cash: killerCash
+      };
     }
 
     return {
-      shooterId,
-      targetId: target.id,
-      damage,
-      headshot,
-      remaining: target.health,
-      respawn: respawnPosition,
-      score: newScore
+      shot: {
+        shooterId,
+        weapon: shooter.weapon ? shooter.weapon.toState() : null
+      },
+      hit: hitResult
     };
   }
 }
