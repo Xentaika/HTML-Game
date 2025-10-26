@@ -16,6 +16,10 @@ class Player {
     this.score = 0;
     this.weapon = character.loadout.primary;
     this.lastUpdate = Date.now();
+
+    if (this.weapon && typeof this.weapon.reset === 'function') {
+      this.weapon.reset();
+    }
   }
 
   resetForRespawn(spawnPoint) {
@@ -26,6 +30,9 @@ class Player {
     this.input = new MovementInput();
     this.health = this.character.maxHealth;
     this.weapon = this.character.loadout.primary;
+    if (this.weapon && typeof this.weapon.reset === 'function') {
+      this.weapon.reset();
+    }
   }
 
   updateQuaternion(quaternion) {
@@ -86,6 +93,42 @@ class Player {
     const y = iy * qw + iw * -qy + iz * -qx - ix * -qz;
     const z = iz * qw + iw * -qz + ix * -qy - iy * -qx;
     return { x, y, z };
+  }
+
+  getShootDirection() {
+    const forward = this.getForward();
+    const length = Math.hypot(forward.x, forward.y, forward.z);
+    if (length === 0) {
+      return { x: 0, y: 0, z: -1 };
+    }
+    return { x: forward.x / length, y: forward.y / length, z: forward.z / length };
+  }
+
+  getShootOrigin(direction) {
+    const eyeHeight = 0.35;
+    return {
+      x: this.position.x + direction.x * 0.2,
+      y: this.position.y + eyeHeight,
+      z: this.position.z + direction.z * 0.2
+    };
+  }
+
+  prepareShot(time) {
+    if (!this.weapon) {
+      return null;
+    }
+
+    if (typeof this.weapon.update === 'function') {
+      this.weapon.update(time);
+    }
+
+    if (typeof this.weapon.tryShoot !== 'function' || !this.weapon.tryShoot(time)) {
+      return null;
+    }
+
+    const direction = this.getShootDirection();
+    const origin = this.getShootOrigin(direction);
+    return { origin, direction };
   }
 
   integrate(config, colliders) {

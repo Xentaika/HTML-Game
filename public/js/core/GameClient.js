@@ -251,8 +251,12 @@ export class GameClient {
   }
 
   reloadWeapon() {
+    if (!socket.connected || !this.player.id) {
+      return;
+    }
     const now = performance.now() / 1000;
     if (this.player.weapon.startReload(now)) {
+      socket.emit('reload');
       this.hud.setReloadIndicator(true);
       this.hud.addFeedEntry('Перезарядка…');
     }

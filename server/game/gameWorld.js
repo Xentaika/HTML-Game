@@ -67,7 +67,11 @@ class GameWorld {
   }
 
   step() {
+    const now = Date.now() / 1000;
     this.players.forEach((player) => {
+      if (player.weapon && typeof player.weapon.update === 'function') {
+        player.weapon.update(now);
+      }
       player.integrate(this.config, this.colliders);
     });
     this.tick += 1;
@@ -95,14 +99,33 @@ class GameWorld {
     return spawn;
   }
 
-  registerHit(shooterId, origin, direction) {
+  requestReload(playerId) {
+    const player = this.players.get(playerId);
+    if (!player || !player.weapon || typeof player.weapon.startReload !== 'function') {
+      return false;
+    }
+    const now = Date.now() / 1000;
+    return player.weapon.startReload(now);
+  }
+
+  registerHit(shooterId) {
     const shooter = this.players.get(shooterId);
     if (!shooter) {
       return null;
     }
 
     const weapon = shooter.weapon;
+    const now = Date.now() / 1000;
+    const shot = shooter.prepareShot(now);
+    if (!shot) {
+      return null;
+    }
+
+    const { origin, direction } = shot;
     const dir = normalize(direction);
+    if (dir.x === 0 && dir.y === 0 && dir.z === 0) {
+      return null;
+    }
     let bestHit = null;
 
     this.players.forEach((target, targetId) => {

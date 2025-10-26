@@ -50,11 +50,8 @@ class ShooterServer {
         }
       });
 
-      socket.on('shoot', ({ origin, direction }) => {
-        if (!origin || !direction) {
-          return;
-        }
-        const result = this.world.registerHit(socket.id, origin, direction);
+      socket.on('shoot', () => {
+        const result = this.world.registerHit(socket.id);
         if (!result) {
           return;
         }
@@ -68,6 +65,10 @@ class ShooterServer {
             score: result.score
           });
         }
+      });
+
+      socket.on('reload', () => {
+        this.world.requestReload(socket.id);
       });
 
       socket.on('disconnect', () => {
