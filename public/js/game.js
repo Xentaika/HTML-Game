@@ -40,7 +40,7 @@ const hitMarker = document.getElementById('hitMarker');
 const player = {
   id: null,
   position: new THREE.Vector3(),
-  velocity: new THREE.Vector3(),
+  quaternion: new THREE.Quaternion(),
   ammo: 12,
   magazineSize: 12,
   reserve: 60,
@@ -52,24 +52,15 @@ const player = {
   score: 0
 };
 
-const world = {
-  gravity: 30,
-  speed: 16,
-  sprint: 24,
-  jump: 8,
-  friction: 10,
-  onGround: false,
-  velocity: new THREE.Vector3()
-};
-
 const keys = {};
 const remotePlayers = new Map();
-const colliders = [];
-const playerCollider = {
-  radius: 0.6,
-  height: 1.6
-};
-let lastNetworkUpdate = 0;
+
+let inputDirty = false;
+let pendingJump = false;
+const orientationCache = { x: 0, y: 0, z: 0, w: 1 };
+let inputAccumulator = 0;
+const INPUT_INTERVAL = 1 / 60;
+const MOVEMENT_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'ShiftRight']);
 let pointerLocked = false;
 let hitMarkerTimeout = null;
 let hitMarkerHideTimeout = null;
@@ -120,8 +111,6 @@ function showHitMarker(headshot = false) {
 }
 
 function buildArena() {
-  colliders.length = 0;
-
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(120, 120),
     new THREE.MeshStandardMaterial({ color: 0x0a0f23, metalness: 0.2, roughness: 0.8 })
@@ -153,8 +142,6 @@ function buildArena() {
     scene.add(mesh);
     mesh.updateMatrixWorld(true);
 
-    const bounds = new THREE.Box3().setFromObject(mesh);
-    colliders.push(bounds);
   });
 
   const sky = new THREE.Mesh(
@@ -294,8 +281,6 @@ function connect() {
 function spawnAt(position) {
   player.position.set(position.x, position.y, position.z);
   controls.getObject().position.copy(player.position);
-  world.velocity.set(0, 0, 0);
-  world.onGround = false;
 }
 
 function fireWeapon() {
@@ -338,154 +323,102 @@ function reloadWeapon() {
   }, 1400);
 }
 
-function resolveCollisions(previousPosition, currentPosition) {
-  const radius = playerCollider.radius;
-  const height = playerCollider.height;
-
-  colliders.forEach((collider) => {
-    const top = currentPosition.y;
-    const bottom = top - height;
-
-    if (top < collider.min.y || bottom > collider.max.y) {
-      return;
-    }
-
-    const nearestX = Math.max(collider.min.x, Math.min(currentPosition.x, collider.max.x));
-    const nearestZ = Math.max(collider.min.z, Math.min(currentPosition.z, collider.max.z));
-
-    let deltaX = currentPosition.x - nearestX;
-    let deltaZ = currentPosition.z - nearestZ;
-    let distanceSq = deltaX * deltaX + deltaZ * deltaZ;
-
-    if (distanceSq >= radius * radius) {
-      return;
-    }
-
-    if (distanceSq === 0) {
-      deltaX = currentPosition.x - previousPosition.x;
-      deltaZ = currentPosition.z - previousPosition.z;
-      distanceSq = deltaX * deltaX + deltaZ * deltaZ;
-      if (distanceSq === 0) {
-        deltaX = 1;
-        deltaZ = 0;
-        distanceSq = 1;
-      }
-    }
-
-    const distance = Math.sqrt(distanceSq);
-    const penetration = radius - distance;
-    const normalX = deltaX / distance;
-    const normalZ = deltaZ / distance;
-
-    currentPosition.x += normalX * penetration;
-    currentPosition.z += normalZ * penetration;
-
-    if ((normalX > 0 && world.velocity.x < 0) || (normalX < 0 && world.velocity.x > 0)) {
-      world.velocity.x = 0;
-    }
-    if ((normalZ > 0 && world.velocity.z < 0) || (normalZ < 0 && world.velocity.z > 0)) {
-      world.velocity.z = 0;
-    }
-  });
-}
-
-function updateMovement(delta) {
-  const object = controls.getObject();
-  if (!pointerLocked) {
-    player.position.copy(object.position);
-    return;
-  }
-
-  const direction = new THREE.Vector3();
-
-  const moveForward = keys['KeyW'] || false;
-  const moveBackward = keys['KeyS'] || false;
-  const moveLeft = keys['KeyA'] || false;
-  const moveRight = keys['KeyD'] || false;
-  const sprint = keys['ShiftLeft'] || keys['ShiftRight'];
-
-  direction.set(0, 0, 0);
-  if (moveForward) direction.z -= 1;
-  if (moveBackward) direction.z += 1;
-  if (moveLeft) direction.x -= 1;
-  if (moveRight) direction.x += 1;
-  direction.normalize();
-
-  if (direction.lengthSq() > 0) {
-    const speed = sprint ? world.sprint : world.speed;
-    const forward = new THREE.Vector3();
-    controls.getDirection(forward);
-    forward.y = 0;
-    forward.normalize();
-
-    const right = new THREE.Vector3();
-    right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).negate();
-
-    world.velocity.x += (-forward.x * direction.z - right.x * direction.x) * speed * delta;
-    world.velocity.z += (-forward.z * direction.z - right.z * direction.x) * speed * delta;
-  }
-
-  world.velocity.y -= world.gravity * delta;
-
-  if (world.onGround) {
-    world.velocity.x -= world.velocity.x * Math.min(world.friction * delta, 1);
-    world.velocity.z -= world.velocity.z * Math.min(world.friction * delta, 1);
-  }
-
-  const previousPosition = object.position.clone();
-  object.position.addScaledVector(world.velocity, delta);
-  resolveCollisions(previousPosition, object.position);
-
-  if (object.position.y < 1.6) {
-    world.velocity.y = 0;
-    object.position.y = 1.6;
-    world.onGround = true;
-  } else {
-    world.onGround = false;
-  }
-
-  player.position.copy(object.position);
-}
-
-function sendState(delta) {
-  lastNetworkUpdate += delta;
-  if (lastNetworkUpdate < 0.05 || !socket.connected || !player.id) {
-    return;
-  }
-  lastNetworkUpdate = 0;
-
-  const position = controls.getObject().position;
+function trackOrientationChanges() {
   const quaternion = controls.getObject().quaternion;
+  const threshold = 0.0001;
+  if (
+    Math.abs(quaternion.x - orientationCache.x) > threshold ||
+    Math.abs(quaternion.y - orientationCache.y) > threshold ||
+    Math.abs(quaternion.z - orientationCache.z) > threshold ||
+    Math.abs(quaternion.w - orientationCache.w) > threshold
+  ) {
+    inputDirty = true;
+  }
+}
 
-  socket.emit('stateUpdate', {
-    position: { x: position.x, y: position.y, z: position.z },
-    quaternion: { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w }
-  });
+function buildInputPayload() {
+  const quaternion = controls.getObject().quaternion;
+  return {
+    forward: keys['KeyW'] || false,
+    backward: keys['KeyS'] || false,
+    left: keys['KeyA'] || false,
+    right: keys['KeyD'] || false,
+    sprint: keys['ShiftLeft'] || keys['ShiftRight'] || false,
+    jump: pendingJump,
+    quaternion: {
+      x: quaternion.x,
+      y: quaternion.y,
+      z: quaternion.z,
+      w: quaternion.w
+    }
+  };
+}
+
+function sendInput(delta) {
+  if (!socket.connected || !player.id) {
+    pendingJump = false;
+    return;
+  }
+
+  inputAccumulator += delta;
+  const shouldSend = inputDirty || pendingJump || inputAccumulator >= INPUT_INTERVAL;
+  if (!shouldSend) {
+    return;
+  }
+
+  inputAccumulator = 0;
+  const payload = buildInputPayload();
+  socket.emit('input', payload);
+
+  pendingJump = false;
+  inputDirty = false;
+  orientationCache.x = payload.quaternion.x;
+  orientationCache.y = payload.quaternion.y;
+  orientationCache.z = payload.quaternion.z;
+  orientationCache.w = payload.quaternion.w;
 }
 
 function animate() {
   requestAnimationFrame(animate);
   const delta = clock.getDelta();
-  updateMovement(delta);
+  trackOrientationChanges();
+  sendInput(delta);
   renderer.render(scene, camera);
   updateNameplates();
-  sendState(delta);
 }
 
 function initEvents() {
   document.addEventListener('keydown', (event) => {
-    keys[event.code] = true;
-    if (event.code === 'Space' && world.onGround) {
-      world.velocity.y = player.health > 0 ? world.jump : 0;
-      world.onGround = false;
-    }
     if (event.code === 'KeyR') {
-      reloadWeapon();
+      if (!event.repeat) {
+        reloadWeapon();
+      }
+      return;
+    }
+
+    if (event.repeat) {
+      return;
+    }
+
+    keys[event.code] = true;
+
+    if (event.code === 'Space') {
+      event.preventDefault();
+      pendingJump = true;
+      inputDirty = true;
+    } else if (MOVEMENT_KEYS.has(event.code)) {
+      inputDirty = true;
     }
   });
 
   document.addEventListener('keyup', (event) => {
     keys[event.code] = false;
+    if (event.code === 'Space') {
+      event.preventDefault();
+      inputDirty = true;
+    } else if (MOVEMENT_KEYS.has(event.code)) {
+      inputDirty = true;
+    }
   });
 
   document.addEventListener('mousedown', (event) => {
@@ -531,34 +464,70 @@ function setupSocket() {
   socket.on('init', ({ id, players: serverPlayers }) => {
     player.id = id;
     serverPlayers.forEach((info) => {
+      if (!info || !info.id) {
+        return;
+      }
       if (info.id === id) {
         spawnAt(info.position);
         player.health = info.health;
         player.score = info.score;
+        if (info.quaternion) {
+          player.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w);
+        }
       } else {
         createRemoteAvatar(info.id);
-        remotePlayers.get(info.id).group.position.set(
-          info.position.x,
-          info.position.y,
-          info.position.z
-        );
+        const remote = remotePlayers.get(info.id);
+        remote.group.position.set(info.position.x, info.position.y, info.position.z);
+        if (info.quaternion) {
+          remote.group.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w);
+        }
       }
     });
+    const currentQuat = controls.getObject().quaternion;
+    orientationCache.x = currentQuat.x;
+    orientationCache.y = currentQuat.y;
+    orientationCache.z = currentQuat.z;
+    orientationCache.w = currentQuat.w;
     updateHUD();
   });
 
   socket.on('playerJoined', (info) => {
     if (info.id === player.id) return;
     createRemoteAvatar(info.id);
-    remotePlayers.get(info.id).group.position.set(info.position.x, info.position.y, info.position.z);
+    const remote = remotePlayers.get(info.id);
+    remote.group.position.set(info.position.x, info.position.y, info.position.z);
+    if (info.quaternion) {
+      remote.group.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w);
+    }
     addFeedEntry(`Игрок ${info.id.slice(0, 6)} подключился`);
   });
 
-  socket.on('playerState', ({ id, position, quaternion }) => {
-    const remote = remotePlayers.get(id);
-    if (!remote) return;
-    remote.group.position.set(position.x, position.y, position.z);
-    remote.group.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
+  socket.on('stateSnapshot', ({ players: serverPlayers }) => {
+    if (!Array.isArray(serverPlayers)) {
+      return;
+    }
+
+    serverPlayers.forEach((info) => {
+      if (!info || !info.id || !info.position || !info.quaternion) {
+        return;
+      }
+
+      if (info.id === player.id) {
+        player.position.set(info.position.x, info.position.y, info.position.z);
+        controls.getObject().position.copy(player.position);
+        player.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w);
+      } else {
+        if (!remotePlayers.has(info.id)) {
+          createRemoteAvatar(info.id);
+        }
+        const remote = remotePlayers.get(info.id);
+        if (!remote) {
+          return;
+        }
+        remote.group.position.set(info.position.x, info.position.y, info.position.z);
+        remote.group.quaternion.set(info.quaternion.x, info.quaternion.y, info.quaternion.z, info.quaternion.w);
+      }
+    });
   });
 
   socket.on('playerLeft', ({ id }) => {
