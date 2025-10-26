@@ -20,9 +20,12 @@ export class SmoothPointerLockControls extends EventDispatcher {
     this.minPolarAngle = 0;
     this.maxPolarAngle = Math.PI;
 
-    this.pointerSpeed = options.pointerSpeed ?? 0.2;
+    this.pointerSpeed = options.pointerSpeed ?? 0.6;
+    this.maxDelta = Math.max(0, options.maxDelta ?? 1200);
     this.maxPolarAngle = MathUtils.clamp(options.maxPolarAngle ?? Math.PI, 0.1, Math.PI);
     this.minPolarAngle = MathUtils.clamp(options.minPolarAngle ?? 0, 0, this.maxPolarAngle);
+
+    this._skipNextMouseEvent = false;
 
     this._onMouseMove = this._handleMouseMove.bind(this);
     this._onPointerlockChange = this._handlePointerLockChange.bind(this);
@@ -86,14 +89,22 @@ export class SmoothPointerLockControls extends EventDispatcher {
     if (this.isLocked === false) {
       return;
     }
+    if (this._skipNextMouseEvent) {
+      this._skipNextMouseEvent = false;
+      return;
+    }
+
     const movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
     const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+
+    const clampedX = MathUtils.clamp(movementX, -this.maxDelta, this.maxDelta);
+    const clampedY = MathUtils.clamp(movementY, -this.maxDelta, this.maxDelta);
 
     const scale = 0.002 * this.pointerSpeed;
 
     _euler.setFromQuaternion(this.camera.quaternion);
-    _euler.y -= movementX * scale;
-    _euler.x -= movementY * scale;
+    _euler.y -= clampedX * scale;
+    _euler.x -= clampedY * scale;
 
     _euler.x = Math.max(HALF_PI - this.maxPolarAngle, Math.min(HALF_PI - this.minPolarAngle, _euler.x));
 
@@ -104,9 +115,11 @@ export class SmoothPointerLockControls extends EventDispatcher {
   _handlePointerLockChange() {
     if (this.domElement.ownerDocument.pointerLockElement === this.domElement) {
       this.isLocked = true;
+      this._skipNextMouseEvent = true;
       this.dispatchEvent(_lockEvent);
     } else {
       this.isLocked = false;
+      this._skipNextMouseEvent = false;
       this.dispatchEvent(_unlockEvent);
     }
   }
