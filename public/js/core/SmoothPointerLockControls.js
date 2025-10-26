@@ -21,8 +21,8 @@ export class SmoothPointerLockControls extends EventDispatcher {
     this.maxPolarAngle = Math.PI;
 
     this.pointerSpeed = options.pointerSpeed ?? 0.2;
-    this.smoothingFactor = MathUtils.clamp(options.smoothingFactor ?? 0.2, 0.01, 1);
-    this.maxRotationStep = options.maxRotationStep ?? 0.05;
+    this.smoothingFactor = MathUtils.clamp(options.smoothingFactor ?? 0.2, 0, 1);
+    this.maxRotationStep = options.maxRotationStep ?? Infinity;
 
     this._pendingDeltaX = 0;
     this._pendingDeltaY = 0;
@@ -90,23 +90,36 @@ export class SmoothPointerLockControls extends EventDispatcher {
       return;
     }
 
-    const smoothing = 1 - Math.exp(-this.smoothingFactor * (delta * 60));
-    if (smoothing <= 0) {
-      return;
+    let applyX;
+    let applyY;
+
+    if (this.smoothingFactor <= 0) {
+      applyX = this._pendingDeltaX;
+      applyY = this._pendingDeltaY;
+      this.resetSmoothing();
+    } else {
+      const smoothing = 1 - Math.exp(-this.smoothingFactor * (delta * 60));
+      if (smoothing <= 0) {
+        return;
+      }
+
+      applyX = this._pendingDeltaX * smoothing;
+      applyY = this._pendingDeltaY * smoothing;
+
+      this._pendingDeltaX -= applyX;
+      this._pendingDeltaY -= applyY;
     }
 
-    let applyX = this._pendingDeltaX * smoothing;
-    let applyY = this._pendingDeltaY * smoothing;
-
-    applyX = MathUtils.clamp(applyX, -this.maxRotationStep, this.maxRotationStep);
-    applyY = MathUtils.clamp(applyY, -this.maxRotationStep, this.maxRotationStep);
+    if (!Number.isFinite(this.maxRotationStep) || this.maxRotationStep <= 0) {
+      // no clamping required
+    } else {
+      applyX = MathUtils.clamp(applyX, -this.maxRotationStep, this.maxRotationStep);
+      applyY = MathUtils.clamp(applyY, -this.maxRotationStep, this.maxRotationStep);
+    }
 
     if (Math.abs(applyX) < 1e-7 && Math.abs(applyY) < 1e-7) {
       return;
     }
-
-    this._pendingDeltaX -= applyX;
-    this._pendingDeltaY -= applyY;
 
     _euler.setFromQuaternion(this.camera.quaternion);
     _euler.y -= applyX;

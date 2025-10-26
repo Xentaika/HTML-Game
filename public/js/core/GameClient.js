@@ -22,9 +22,9 @@ export class GameClient {
 
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
     this.controls = new SmoothPointerLockControls(this.camera, this.renderer.domElement, {
-      pointerSpeed: 0.18,
-      smoothingFactor: 0.28,
-      maxRotationStep: 0.035
+      pointerSpeed: 0.22,
+      smoothingFactor: 0,
+      maxRotationStep: Infinity
     });
     this.scene.add(this.controls.getObject());
 
