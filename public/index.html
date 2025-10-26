@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Neon Arena - Multiplayer</title>
+    <title>Source Arena</title>
     <link rel="stylesheet" href="/styles.css" />
     <script type="importmap">
       {
@@ -16,46 +16,67 @@
   </head>
   <body>
     <main id="overlay">
-      <div class="hud">
-        <section class="stat">
-          <h2>Health</h2>
+      <header class="hud-top">
+        <div class="stat-block">
+          <span class="label">Здоровье</span>
           <div class="health-bar">
             <div class="health-fill" id="healthFill"></div>
           </div>
-          <p id="healthValue" class="stat-value">100 HP</p>
-        </section>
-        <section class="stat">
-          <h2>Ammo</h2>
-          <p id="ammoDisplay" class="stat-value">12 / 60</p>
-          <p id="reloadIndicator" class="stat-meta hidden">Перезарядка…</p>
-        </section>
-        <section class="stat">
-          <h2>Kills</h2>
-          <p id="scoreDisplay" class="stat-value">0</p>
-        </section>
-      </div>
-      <div id="serverStats" class="metrics hidden">
+          <span class="value" id="healthValue">100 HP</span>
+        </div>
+        <div class="stat-block">
+          <span class="label">Оружие</span>
+          <span class="value" id="weaponName">—</span>
+          <span class="value value--secondary" id="ammoDisplay">—</span>
+          <span class="stat-meta hidden" id="reloadIndicator">Перезарядка…</span>
+        </div>
+        <div class="stat-block">
+          <span class="label">Баланс</span>
+          <span class="value" id="walletDisplay">$800</span>
+          <span class="stat-meta" id="buyZoneHint">Зона закупки недоступна</span>
+        </div>
+        <div class="stat-block">
+          <span class="label">Фраги</span>
+          <span class="value" id="scoreDisplay">0</span>
+        </div>
+      </header>
+
+      <section id="serverStats" class="metrics hidden">
         <div class="metric">
-          <span class="label">Ping</span>
-          <span id="pingValue" class="value">—</span>
+          <span class="metric__label">Ping</span>
+          <span class="metric__value" id="pingValue">—</span>
         </div>
         <div class="metric">
-          <span class="label">Tickrate</span>
-          <span id="tickValue" class="value">—</span>
+          <span class="metric__label">Tick</span>
+          <span class="metric__value" id="tickValue">—</span>
         </div>
-      </div>
+      </section>
+
+      <section id="buyMenu" class="buy-menu hidden" tabindex="0">
+        <header class="buy-menu__header">
+          <h2>Меню закупки</h2>
+          <p>Доступно только в зоне закупки. Нажмите B для закрытия.</p>
+        </header>
+        <div id="buyList" class="buy-menu__list"></div>
+      </section>
+
       <div class="feed" id="eventFeed"></div>
+
       <div class="crosshair" id="crosshair">
         <span class="crosshair-line vertical"></span>
         <span class="crosshair-line horizontal"></span>
       </div>
+
       <div id="hitMarker" class="hit-marker hidden"></div>
+
       <div id="startPrompt" class="prompt">
-        <h1>Neon Arena</h1>
-        <p>Нажмите, чтобы присоединиться. W A S D – движение, Space – прыжок, ЛКМ – огонь, R – перезарядка.</p>
+        <h1>Source Arena</h1>
+        <p>Нажмите, чтобы подключиться. WASD — движение, ЛКМ — огонь, R — перезарядка, B — закупка.</p>
       </div>
+
       <div id="connectionStatus" class="status hidden">Подключение…</div>
     </main>
+
     <canvas id="world"></canvas>
     <script src="/socket.io/socket.io.js"></script>
     <script type="module" src="/js/main.js"></script>

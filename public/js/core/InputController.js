@@ -1,5 +1,13 @@
 import * as THREE from 'three';
 
+const KEY_TO_SLOT = {
+  Digit1: 'melee',
+  Digit2: 'sidearm',
+  Digit3: 'smg',
+  Digit4: 'rifle',
+  Digit5: 'sniper'
+};
+
 export class InputController {
   constructor(controls, hud) {
     this.controls = controls;
@@ -7,12 +15,16 @@ export class InputController {
     this.keys = {};
     this.pointerLocked = false;
     this.pendingJump = false;
-    this.inputAccumulator = 0;
+    this.sequence = 0;
     this.orientationCache = new THREE.Quaternion();
+
     this.onInput = () => {};
     this.onFire = () => {};
     this.onReload = () => {};
     this.onConnectRequest = () => {};
+    this.onToggleBuy = () => {};
+    this.onSelectSlot = () => {};
+
     this.bindEvents();
   }
 
@@ -22,11 +34,21 @@ export class InputController {
         return;
       }
       this.keys[event.code] = true;
-      if (event.code === 'Space') {
-        this.pendingJump = true;
-      }
-      if (event.code === 'KeyR') {
-        this.onReload();
+      switch (event.code) {
+        case 'Space':
+          this.pendingJump = true;
+          break;
+        case 'KeyR':
+          this.onReload();
+          break;
+        case 'KeyB':
+          this.onToggleBuy();
+          break;
+        default:
+          if (KEY_TO_SLOT[event.code]) {
+            this.onSelectSlot(KEY_TO_SLOT[event.code]);
+          }
+          break;
       }
       this.onInput();
     });
@@ -66,13 +88,17 @@ export class InputController {
 
   buildInputPayload() {
     const quaternion = this.controls.getObject().quaternion;
-    return {
-      forward: this.keys['KeyW'] || false,
-      backward: this.keys['KeyS'] || false,
-      left: this.keys['KeyA'] || false,
-      right: this.keys['KeyD'] || false,
+    const state = {
+      forward: Boolean(this.keys['KeyW']),
+      backward: Boolean(this.keys['KeyS']),
+      left: Boolean(this.keys['KeyA']),
+      right: Boolean(this.keys['KeyD']),
       walk: Boolean(this.keys['ShiftLeft'] || this.keys['ShiftRight']),
-      jump: this.pendingJump,
+      jump: this.pendingJump
+    };
+    return {
+      sequence: ++this.sequence,
+      state,
       quaternion: {
         x: quaternion.x,
         y: quaternion.y,
@@ -97,6 +123,8 @@ export class InputController {
 
   acknowledgePayload(payload) {
     this.pendingJump = false;
-    this.orientationCache.set(payload.quaternion.x, payload.quaternion.y, payload.quaternion.z, payload.quaternion.w);
+    if (payload && payload.quaternion) {
+      this.orientationCache.set(payload.quaternion.x, payload.quaternion.y, payload.quaternion.z, payload.quaternion.w);
+    }
   }
 }

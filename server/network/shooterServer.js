@@ -4,6 +4,7 @@ const path = require('path');
 const { Server } = require('socket.io');
 const { MovementConfig } = require('../config/movementConfig');
 const { GameWorld } = require('../game/gameWorld');
+const { WEAPON_DEFINITIONS } = require('../config/weaponData');
 
 class ShooterServer {
   constructor() {
@@ -26,10 +27,7 @@ class ShooterServer {
   setupStatic() {
     this.app.use(express.static(path.join(__dirname, '..', '..', 'public')));
     this.app.use('/three', express.static(path.join(__dirname, '..', '..', 'node_modules/three/build')));
-    this.app.use(
-      '/three-examples',
-      express.static(path.join(__dirname, '..', '..', 'node_modules/three/examples/jsm'))
-    );
+    this.app.use('/three-examples', express.static(path.join(__dirname, '..', '..', 'node_modules/three/examples/jsm')));
   }
 
   setupSockets() {
@@ -39,16 +37,14 @@ class ShooterServer {
       socket.emit('init', {
         id: socket.id,
         snapshot: this.world.getSnapshot(),
-        tickRate: this.config.tickRate
+        tickRate: this.config.tickRate,
+        weapons: WEAPON_DEFINITIONS
       });
 
       socket.broadcast.emit('playerJoined', player.toSnapshot());
 
       socket.on('input', (payload) => {
         this.world.updatePlayerInput(socket.id, payload);
-        if (payload && payload.quaternion) {
-          this.world.updatePlayerQuaternion(socket.id, payload.quaternion);
-        }
       });
 
       socket.on('clientPing', (_, respond) => {
@@ -62,20 +58,56 @@ class ShooterServer {
         if (!result) {
           return;
         }
-
-        this.io.emit('playerHit', result);
-        if (result.respawn) {
-          this.io.emit('playerEliminated', {
-            targetId: result.targetId,
-            killerId: result.shooterId,
-            respawn: result.respawn,
-            score: result.score
-          });
+        this.io.emit('weaponFired', {
+          shooterId: result.shooterId,
+          weaponId: result.weaponId,
+          ammo: result.ammo,
+          reserve: result.reserve,
+          reloading: result.reloading
+        });
+        if (result.hit) {
+          const hit = { shooterId: result.shooterId, ...result.hit };
+          this.io.emit('playerHit', hit);
+          if (hit.respawn) {
+            this.io.emit('playerEliminated', {
+              targetId: hit.targetId,
+              killerId: hit.shooterId,
+              respawn: hit.respawn,
+              score: hit.score
+            });
+          }
         }
       });
 
       socket.on('reload', () => {
-        this.world.requestReload(socket.id);
+        const info = this.world.requestReload(socket.id);
+        if (info) {
+          socket.emit('reloadStarted', info);
+          socket.broadcast.emit('remoteReload', { playerId: socket.id, ...info });
+        }
+      });
+
+      socket.on('equipWeapon', ({ weaponId }) => {
+        if (!weaponId) {
+          return;
+        }
+        const result = this.world.handleEquip(socket.id, weaponId);
+        socket.emit('inventoryUpdate', { ...result, context: 'equip' });
+      });
+
+      socket.on('buyWeapon', ({ weaponId }) => {
+        if (!weaponId) {
+          return;
+        }
+        const result = this.world.handleBuy(socket.id, weaponId);
+        socket.emit('inventoryUpdate', { ...result, context: 'buy' });
+        if (result.ok) {
+          socket.broadcast.emit('playerPurchased', {
+            playerId: socket.id,
+            weaponId,
+            activeWeapon: result.activeWeapon
+          });
+        }
       });
 
       socket.on('disconnect', () => {
