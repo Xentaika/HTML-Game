@@ -90,12 +90,12 @@ function tryRegisterHit(shooterId, origin, direction) {
 
     const headCenter = {
       x: target.position.x,
-      y: target.position.y + 1.5,
+      y: target.position.y + 0.35,
       z: target.position.z
     };
     const bodyCenter = {
       x: target.position.x,
-      y: target.position.y + 0.9,
+      y: target.position.y - 0.6,
       z: target.position.z
     };
 

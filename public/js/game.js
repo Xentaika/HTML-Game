@@ -28,10 +28,14 @@ const clock = new THREE.Clock();
 const overlay = document.getElementById('overlay');
 const startPrompt = document.getElementById('startPrompt');
 const healthFill = document.getElementById('healthFill');
+const healthValue = document.getElementById('healthValue');
 const ammoDisplay = document.getElementById('ammoDisplay');
+const reloadIndicator = document.getElementById('reloadIndicator');
 const scoreDisplay = document.getElementById('scoreDisplay');
 const eventFeed = document.getElementById('eventFeed');
 const connectionStatus = document.getElementById('connectionStatus');
+const crosshair = document.getElementById('crosshair');
+const hitMarker = document.getElementById('hitMarker');
 
 const player = {
   id: null,
@@ -41,6 +45,7 @@ const player = {
   magazineSize: 12,
   reserve: 60,
   reloading: false,
+  reloadTimer: null,
   lastShot: 0,
   fireRate: 0.22,
   health: 100,
@@ -61,6 +66,53 @@ const keys = {};
 const remotePlayers = new Map();
 let lastNetworkUpdate = 0;
 let pointerLocked = false;
+let hitMarkerTimeout = null;
+let hitMarkerHideTimeout = null;
+let crosshairTimeout = null;
+
+function setReloadIndicator(visible, message = 'Перезарядка…') {
+  if (!reloadIndicator) return;
+  if (visible) {
+    reloadIndicator.textContent = message;
+    reloadIndicator.classList.remove('hidden');
+  } else {
+    reloadIndicator.classList.add('hidden');
+  }
+}
+
+function animateCrosshair(state) {
+  if (!crosshair) return;
+  if (state === 'fire') {
+    crosshair.classList.add('firing');
+    clearTimeout(crosshairTimeout);
+    crosshairTimeout = setTimeout(() => crosshair.classList.remove('firing'), 90);
+  } else if (state === 'hit' || state === 'headshot') {
+    crosshair.classList.remove('headshot', 'hit');
+    crosshair.classList.add(state === 'headshot' ? 'headshot' : 'hit');
+    clearTimeout(crosshairTimeout);
+    crosshairTimeout = setTimeout(() => {
+      crosshair.classList.remove('headshot', 'hit');
+    }, 140);
+  }
+}
+
+function showHitMarker(headshot = false) {
+  if (!hitMarker) return;
+  hitMarker.classList.remove('headshot');
+  if (headshot) {
+    hitMarker.classList.add('headshot');
+  }
+  hitMarker.classList.remove('hidden');
+  hitMarker.classList.add('visible');
+  clearTimeout(hitMarkerTimeout);
+  clearTimeout(hitMarkerHideTimeout);
+  hitMarkerTimeout = setTimeout(() => {
+    hitMarker.classList.remove('visible');
+    hitMarkerHideTimeout = setTimeout(() => {
+      hitMarker.classList.add('hidden');
+    }, 80);
+  }, 120);
+}
 
 function buildArena() {
   const floor = new THREE.Mesh(
@@ -209,6 +261,7 @@ function addFeedEntry(text, headshot = false) {
 function updateHUD() {
   healthFill.style.width = `${player.health}%`;
   healthFill.style.background = player.health > 30 ? 'linear-gradient(90deg, #38ffb5, #37d3ff)' : 'linear-gradient(90deg, #ff784f, #ff356b)';
+  healthValue.textContent = `${Math.max(0, Math.round(player.health))} HP`;
   ammoDisplay.textContent = `${player.ammo} / ${player.reserve}`;
   scoreDisplay.textContent = player.score;
 }
@@ -242,6 +295,7 @@ function fireWeapon() {
   player.lastShot = now;
   player.ammo -= 1;
   updateHUD();
+  animateCrosshair('fire');
 
   const origin = controls.getObject().position.clone();
   const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
@@ -256,13 +310,19 @@ function reloadWeapon() {
     return;
   }
   player.reloading = true;
+  setReloadIndicator(true);
   addFeedEntry('Перезарядка…');
-  setTimeout(() => {
+  if (player.reloadTimer) {
+    clearTimeout(player.reloadTimer);
+  }
+  player.reloadTimer = setTimeout(() => {
     const needed = player.magazineSize - player.ammo;
     const used = Math.min(needed, player.reserve);
     player.reserve -= used;
     player.ammo += used;
     player.reloading = false;
+    player.reloadTimer = null;
+    setReloadIndicator(false);
     updateHUD();
   }, 1400);
 }
@@ -461,6 +521,8 @@ function setupSocket() {
 
     if (shooterId === player.id) {
       addFeedEntry(`Вы попали по ${targetId.slice(0, 6)}${headshot ? ' (хедшот)' : ''}`, headshot);
+      showHitMarker(headshot);
+      animateCrosshair(headshot ? 'headshot' : 'hit');
     }
   });
 
@@ -471,6 +533,11 @@ function setupSocket() {
       player.ammo = player.magazineSize;
       player.reserve = 60;
       player.reloading = false;
+      if (player.reloadTimer) {
+        clearTimeout(player.reloadTimer);
+        player.reloadTimer = null;
+      }
+      setReloadIndicator(false);
       updateHUD();
     } else if (remotePlayers.has(targetId)) {
       const remote = remotePlayers.get(targetId);

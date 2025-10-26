@@ -22,18 +22,24 @@
           <div class="health-bar">
             <div class="health-fill" id="healthFill"></div>
           </div>
+          <p id="healthValue" class="stat-value">100 HP</p>
         </section>
         <section class="stat">
           <h2>Ammo</h2>
-          <p id="ammoDisplay">12 / 12</p>
+          <p id="ammoDisplay" class="stat-value">12 / 60</p>
+          <p id="reloadIndicator" class="stat-meta hidden">Перезарядка…</p>
         </section>
         <section class="stat">
           <h2>Kills</h2>
-          <p id="scoreDisplay">0</p>
+          <p id="scoreDisplay" class="stat-value">0</p>
         </section>
       </div>
       <div class="feed" id="eventFeed"></div>
-      <div class="crosshair"></div>
+      <div class="crosshair" id="crosshair">
+        <span class="crosshair-line vertical"></span>
+        <span class="crosshair-line horizontal"></span>
+      </div>
+      <div id="hitMarker" class="hit-marker hidden"></div>
       <div id="startPrompt" class="prompt">
         <h1>Neon Arena</h1>
         <p>Нажмите, чтобы присоединиться. W A S D – движение, Space – прыжок, ЛКМ – огонь, R – перезарядка.</p>
